@@ -121,7 +121,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .inferenceSummary span, .inferenceSummary small { display: block; color: #aebfb8; font-size: 10px; line-height: 1.5; }
 .inferenceSummary strong { display: block; color: var(--lime); font-size: 13px; margin: 5px 0; }
 .modelNote { color: #aebfb8; line-height: 1.7; max-width: 790px; font-size: 12px; margin: 20px 0 0; }
-.error { background: #7a312b; color: #ffe9e6; border-radius: 9px; padding: 12px 15px; margin-top: 16px; }
+.error { background: #7a312b; color: #ffe9e6; border-radius: 9px; padding: 12px 15px; margin-top: 16px; display: flex; justify-content: space-between; align-items: center; gap: 18px; }
+.error button { border: 1px solid rgba(255,255,255,.45); color: white; background: transparent; border-radius: 8px; padding: 8px 12px; cursor: pointer; white-space: nowrap; }
+.error button:hover { background: rgba(255,255,255,.12); }
 
 .resultSection { min-height: 520px; }
 .fitStrip { display: grid; grid-template-columns: 140px 140px 140px 1fr; align-items: center; background: #f1efe6; border-radius: 14px; padding: 18px 22px; margin-bottom: 16px; }
@@ -150,6 +152,7 @@ footer { min-height: 180px; background: #0d1c17; color: white; display: flex; al
 .footerBrand { color: white; }
 .footerBrand .brandMark { background: var(--lime); color: var(--ink); }
 footer p { color: #9aaca5; font-size: 13px; margin-left: auto; }
+footer p small { display: block; margin-top: 5px; color: #6f837b; font-family: monospace; }
 footer button { background: transparent; color: var(--lime); border: 0; cursor: pointer; }
 
 .modalBackdrop { position: fixed; inset: 0; background: rgba(7,18,14,.72); backdrop-filter: blur(9px); z-index: 50; display: grid; place-items: center; padding: 18px; }
@@ -197,4 +200,5 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .roadmap > div { grid-template-columns: 1fr; }
   footer { align-items: flex-start; flex-direction: column; }
   footer p { margin-left: 0; }
+  .error { align-items: flex-start; flex-direction: column; }
 }

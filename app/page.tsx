@@ -20,6 +20,7 @@ type Estimate = {
 };
 type SEType = "classical" | "hc1" | "cluster-one" | "cluster-two";
 type FEType = "none" | "one" | "two";
+const APP_VERSION = "2026.07.26.3";
 
 const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
   const firm = Math.floor(i / 6) + 1;
@@ -400,8 +401,19 @@ export default function Home() {
       });
       setError("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "模型估计失败");
+      const message = reason instanceof Error ? reason.message : "模型估计失败";
+      setError(
+        /undefined|not an object|s\[n\]\[r\]/i.test(message)
+          ? "矩阵计算失败：请确认核心解释变量和控制变量在固定效应组内存在变化，并重新加载最新版。"
+          : message,
+      );
     }
+  }
+
+  function reloadLatest() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("version", APP_VERSION.replaceAll(".", "-"));
+    window.location.replace(url.toString());
   }
 
   function exportResult() {
@@ -619,7 +631,12 @@ export default function Home() {
             <small>双向聚类采用企业、年份及交集项的有限样本修正。</small>
           </div>
         </div>
-        {error && <p className="error">{error}</p>}
+        {error && (
+          <div className="error">
+            <span>{error}</span>
+            <button onClick={reloadLatest}>重新加载最新版</button>
+          </div>
+        )}
         <p className="modelNote">
           固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，
           常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。
@@ -679,7 +696,7 @@ export default function Home() {
 
       <footer>
         <div className="brand footerBrand"><span className="brandMark">计</span><span>计量工坊</span></div>
-        <p>一个认真对待识别假设的实证分析工具。</p>
+        <p>一个认真对待识别假设的实证分析工具。<small>v{APP_VERSION}</small></p>
         <button onClick={() => setSupportOpen(true)}>自愿支持项目 →</button>
       </footer>
 
