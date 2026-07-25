@@ -19,6 +19,7 @@ type Estimate = {
   statistic: number;
 };
 type SEType = "classical" | "hc1" | "cluster-one" | "cluster-two";
+type FEType = "none" | "one" | "two";
 
 const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
   const firm = Math.floor(i / 6) + 1;
@@ -133,6 +134,37 @@ function clusterMeat(x: number[][], residuals: number[], ids: string[]) {
   return { meat, groups: groups.size };
 }
 
+function absorbFixedEffects(matrix: number[][], fixedEffects: string[][]) {
+  const transformed = matrix.map((row) => [...row]);
+  for (let iteration = 0; iteration < 200; iteration++) {
+    let largestShift = 0;
+    for (const ids of fixedEffects) {
+      const sums = new Map<string, { values: number[]; count: number }>();
+      ids.forEach((id, rowIndex) => {
+        const group = sums.get(id) ?? {
+          values: Array(transformed[0].length).fill(0),
+          count: 0,
+        };
+        transformed[rowIndex].forEach((value, column) => {
+          group.values[column] += value;
+        });
+        group.count += 1;
+        sums.set(id, group);
+      });
+      ids.forEach((id, rowIndex) => {
+        const group = sums.get(id)!;
+        transformed[rowIndex] = transformed[rowIndex].map((value, column) => {
+          const shift = group.values[column] / group.count;
+          largestShift = Math.max(largestShift, Math.abs(shift));
+          return value - shift;
+        });
+      });
+    }
+    if (largestShift < 1e-10) return transformed;
+  }
+  throw new Error("固定效应吸收未收敛，请检查面板结构");
+}
+
 function runOLS(
   rows: Row[],
   outcome: string,
@@ -140,6 +172,9 @@ function runOLS(
   seType: SEType,
   cluster1: string,
   cluster2: string,
+  feType: FEType,
+  fixedEffect1: string,
+  fixedEffect2: string,
 ) {
   if (!outcome || !predictors.length) throw new Error("请选择被解释变量和至少一个解释变量");
   const clean = rows
@@ -148,20 +183,49 @@ function runOLS(
       x: [1, ...predictors.map((name) => Number(row[name]))],
       cluster1: cluster1 ? row[cluster1] : "",
       cluster2: cluster2 ? row[cluster2] : "",
+      fixedEffect1: fixedEffect1 ? row[fixedEffect1] : "",
+      fixedEffect2: fixedEffect2 ? row[fixedEffect2] : "",
     }))
-    .filter(({ y, x, cluster1: first, cluster2: second }) =>
+    .filter(({ y, x, cluster1: first, cluster2: second, fixedEffect1: fe1, fixedEffect2: fe2 }) =>
       Number.isFinite(y) &&
       x.every(Number.isFinite) &&
       (seType === "classical" || seType === "hc1" || first !== "") &&
-      (seType !== "cluster-two" || second !== ""),
+      (seType !== "cluster-two" || second !== "") &&
+      (feType === "none" || fe1 !== "") &&
+      (feType !== "two" || fe2 !== ""),
     );
   if (clean.length <= predictors.length + 2) throw new Error("有效样本量不足");
-  const x = clean.map((item) => item.x);
-  const y = clean.map((item) => [item.y]);
+  if (feType !== "none" && !fixedEffect1) throw new Error("请选择第一固定效应变量");
+  if (feType === "two" && (!fixedEffect2 || fixedEffect1 === fixedEffect2)) {
+    throw new Error("请选择两个不同的固定效应变量");
+  }
+  const hasFixedEffects = feType !== "none";
+  const rawMatrix = clean.map((item) => [item.y, ...item.x.slice(1)]);
+  const fixedEffectIds = hasFixedEffects
+    ? [
+        clean.map((item) => item.fixedEffect1),
+        ...(feType === "two" ? [clean.map((item) => item.fixedEffect2)] : []),
+      ]
+    : [];
+  const estimationMatrix = hasFixedEffects
+    ? absorbFixedEffects(rawMatrix, fixedEffectIds)
+    : rawMatrix;
+  const x = estimationMatrix.map((item) =>
+    hasFixedEffects ? item.slice(1) : [1, ...item.slice(1)],
+  );
+  const y = estimationMatrix.map((item) => [item[0]]);
+  if (x[0].some((_, column) => x.every((row) => Math.abs(row[column]) < 1e-12))) {
+    throw new Error("至少一个解释变量在固定效应组内没有变化，无法识别系数");
+  }
   const xtxInverse = inverse(multiply(transpose(x), x));
   const beta = multiply(multiply(xtxInverse, transpose(x)), y).map((v) => v[0]);
   const residuals = clean.map((item, i) => item.y - multiply([item.x], beta.map((v) => [v]))[0][0]);
-  const degrees = clean.length - beta.length;
+  const absorbedDf = fixedEffectIds.reduce(
+    (sum, ids) => sum + Math.max(0, new Set(ids).size - 1),
+    0,
+  );
+  const degrees = clean.length - beta.length - absorbedDf;
+  if (degrees <= 0) throw new Error("吸收固定效应后剩余自由度不足");
   const sigma2 = residuals.reduce((sum, value) => sum + value * value, 0) / degrees;
   let covariance = scaleMatrix(xtxInverse, sigma2);
   let clusterCounts: number[] = [];
@@ -197,10 +261,11 @@ function runOLS(
     covariance = multiply(multiply(xtxInverse, combinedMeat), xtxInverse);
   }
   const standardErrors = covariance.map((row, i) => Math.sqrt(Math.max(0, row[i])));
-  const meanY = clean.reduce((sum, item) => sum + item.y, 0) / clean.length;
-  const tss = clean.reduce((sum, item) => sum + (item.y - meanY) ** 2, 0);
+  const modelY = y.map((item) => item[0]);
+  const meanY = hasFixedEffects ? 0 : modelY.reduce((sum, value) => sum + value, 0) / modelY.length;
+  const tss = modelY.reduce((sum, value) => sum + (value - meanY) ** 2, 0);
   const rss = residuals.reduce((sum, value) => sum + value ** 2, 0);
-  const terms = ["截距", ...predictors];
+  const terms = hasFixedEffects ? predictors : ["截距", ...predictors];
   return {
     estimates: terms.map((term, i) => ({
       term,
@@ -211,6 +276,7 @@ function runOLS(
     n: clean.length,
     r2: 1 - rss / tss,
     clusterCounts,
+    absorbedDf,
   };
 }
 
@@ -223,8 +289,16 @@ export default function Home() {
   const [seType, setSeType] = useState<SEType>("cluster-two");
   const [cluster1, setCluster1] = useState("firm_id");
   const [cluster2, setCluster2] = useState("year");
+  const [feType, setFeType] = useState<FEType>("two");
+  const [fixedEffect1, setFixedEffect1] = useState("firm_id");
+  const [fixedEffect2, setFixedEffect2] = useState("year");
   const [estimates, setEstimates] = useState<Estimate[]>([]);
-  const [fit, setFit] = useState<{ n: number; r2: number; clusterCounts: number[] } | null>(null);
+  const [fit, setFit] = useState<{
+    n: number;
+    r2: number;
+    clusterCounts: number[];
+    absorbedDf: number;
+  } | null>(null);
   const [error, setError] = useState("");
   const [supportOpen, setSupportOpen] = useState(false);
 
@@ -257,6 +331,11 @@ export default function Home() {
     "cluster-one": `聚类：${cluster1 || "未选择"}`,
     "cluster-two": `双向聚类：${cluster1 || "?"} × ${cluster2 || "?"}`,
   }[seType];
+  const feLabel = {
+    none: "无固定效应",
+    one: `${fixedEffect1 || "未选择"} 固定效应`,
+    two: `${fixedEffect1 || "?"} + ${fixedEffect2 || "?"} 双向固定效应`,
+  }[feType];
   const missingCount = profiles.reduce((sum, item) => sum + item.missing, 0);
 
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
@@ -283,6 +362,9 @@ export default function Home() {
       setCluster1(firmGuess);
       setCluster2(yearGuess);
       setSeType(firmGuess && yearGuess ? "cluster-two" : "hc1");
+      setFixedEffect1(firmGuess);
+      setFixedEffect2(yearGuess);
+      setFeType(firmGuess && yearGuess ? "two" : "none");
       setEstimates([]);
       setFit(null);
       setError("");
@@ -292,9 +374,24 @@ export default function Home() {
 
   function estimate() {
     try {
-      const result = runOLS(rows, outcome, predictors, seType, cluster1, cluster2);
+      const result = runOLS(
+        rows,
+        outcome,
+        predictors,
+        seType,
+        cluster1,
+        cluster2,
+        feType,
+        fixedEffect1,
+        fixedEffect2,
+      );
       setEstimates(result.estimates);
-      setFit({ n: result.n, r2: result.r2, clusterCounts: result.clusterCounts });
+      setFit({
+        n: result.n,
+        r2: result.r2,
+        clusterCounts: result.clusterCounts,
+        absorbedDf: result.absorbedDf,
+      });
       setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "模型估计失败");
@@ -406,7 +503,7 @@ export default function Home() {
             <span className="step">02 / 模型设定</span>
             <h2>用清晰的语言定义模型</h2>
           </div>
-          <span className="methodBadge">OLS · {seLabel}</span>
+          <span className="methodBadge">OLS · {feLabel} · {seLabel}</span>
         </div>
         <div className="modelBuilder">
           <div className="field">
@@ -449,6 +546,39 @@ export default function Home() {
             </div>
           </div>
         </div>
+        <div className="fixedEffectsBuilder">
+          <div className="field">
+            <label htmlFor="fe-type">固定效应设定</label>
+            <select id="fe-type" value={feType} onChange={(e) => setFeType(e.target.value as FEType)}>
+              <option value="none">不加入固定效应</option>
+              <option value="one">一维固定效应</option>
+              <option value="two">企业 + 年份双向固定效应</option>
+            </select>
+          </div>
+          {feType !== "none" && (
+            <div className="field">
+              <label htmlFor="fe-one">第一固定效应（通常为企业）</label>
+              <select id="fe-one" value={fixedEffect1} onChange={(e) => setFixedEffect1(e.target.value)}>
+                <option value="">请选择</option>
+                {columns.map((column) => <option key={column}>{column}</option>)}
+              </select>
+            </div>
+          )}
+          {feType === "two" && (
+            <div className="field">
+              <label htmlFor="fe-two">第二固定效应（通常为年份）</label>
+              <select id="fe-two" value={fixedEffect2} onChange={(e) => setFixedEffect2(e.target.value)}>
+                <option value="">请选择</option>
+                {columns.map((column) => <option key={column}>{column}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="inferenceSummary">
+            <span>当前固定效应</span>
+            <strong>{feLabel}</strong>
+            <small>采用组内去均值与交替投影吸收，不展示大量虚拟变量系数。</small>
+          </div>
+        </div>
         <div className="inferenceBuilder">
           <div className="field">
             <label htmlFor="se-type">标准误类型</label>
@@ -485,7 +615,7 @@ export default function Home() {
         </div>
         {error && <p className="error">{error}</p>}
         <p className="modelNote">
-          控制变量进入同一回归方程；聚类变量只调整统计推断，不改变系数。企业数或年份数很少时，
+          固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，
           常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。
         </p>
       </section>
@@ -502,12 +632,13 @@ export default function Home() {
           <>
             <div className="fitStrip">
               <div><span>有效样本</span><strong>{fit?.n}</strong></div>
-              <div><span>R²</span><strong>{fit?.r2.toFixed(4)}</strong></div>
+              <div><span>{feType === "none" ? "R²" : "组内 R²"}</span><strong>{fit?.r2.toFixed(4)}</strong></div>
               <div><span>控制变量</span><strong>{controls.length}</strong></div>
               <p>
-                {seLabel}
+                {feLabel}；{seLabel}
                 {fit?.clusterCounts.length ? `；聚类组数 ${fit.clusterCounts.join(" × ")}` : ""}
-                。核心解释变量系数是在控制其他变量后的条件相关关系。
+                {fit?.absorbedDf ? `；约吸收 ${fit.absorbedDf} 个自由度` : ""}
+                。核心解释变量系数来自固定效应组内变化。
               </p>
             </div>
             <div className="resultTable">
