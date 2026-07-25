@@ -409,7 +409,7 @@ export default function Home() {
             <span className="eyebrow">SUPPORT THE PROJECT</span>
             <h2 id="support-title">谢谢你的认可</h2>
             <p>如果这个小工具帮到了你，可以通过支付宝自愿支持后续开发。</p>
-            <img src="/alipay-support.jpg" alt="支付宝支持二维码" />
+            <img src="./alipay-support.jpg" alt="支付宝支持二维码" />
             <small>请在付款前核对支付宝显示的收款人信息。本项目不保存任何支付数据。</small>
           </div>
         </div>
