@@ -76,6 +76,9 @@ function transpose(matrix: number[][]) {
 }
 
 function multiply(a: number[][], b: number[][]) {
+  if (!a.length || !b.length || a[0].length !== b.length) {
+    throw new Error("模型矩阵维度不一致，请检查变量是否在固定效应组内有足够变化");
+  }
   return a.map((row) =>
     b[0].map((_, column) =>
       row.reduce((sum, value, i) => sum + value * b[i][column], 0),
@@ -219,7 +222,10 @@ function runOLS(
   }
   const xtxInverse = inverse(multiply(transpose(x), x));
   const beta = multiply(multiply(xtxInverse, transpose(x)), y).map((v) => v[0]);
-  const residuals = clean.map((item, i) => item.y - multiply([item.x], beta.map((v) => [v]))[0][0]);
+  const betaColumn = beta.map((value) => [value]);
+  const residuals = x.map(
+    (row, i) => y[i][0] - multiply([row], betaColumn)[0][0],
+  );
   const absorbedDf = fixedEffectIds.reduce(
     (sum, ids) => sum + Math.max(0, new Set(ids).size - 1),
     0,
