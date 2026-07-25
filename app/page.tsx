@@ -18,9 +18,12 @@ type Estimate = {
   standardError: number;
   statistic: number;
 };
+type SEType = "classical" | "hc1" | "cluster-one" | "cluster-two";
 
-const demoRows: Row[] = Array.from({ length: 36 }, (_, i) => {
-  const treatment = i >= 18 ? 1 : 0;
+const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
+  const firm = Math.floor(i / 6) + 1;
+  const year = 2019 + (i % 6);
+  const treatment = firm <= 5 && year >= 2022 ? 1 : 0;
   const age = 22 + ((i * 7) % 25);
   const education = 9 + ((i * 5) % 10);
   const experience = Math.max(0, age - education - 6);
@@ -32,6 +35,8 @@ const demoRows: Row[] = Array.from({ length: 36 }, (_, i) => {
     treatment: String(treatment),
     education: String(education),
     experience: String(experience),
+    firm_id: `F${String(firm).padStart(2, "0")}`,
+    year: String(year),
     region: ["东部", "中部", "西部"][i % 3],
   };
 });
@@ -103,13 +108,53 @@ function inverse(matrix: number[][]) {
   return augmented.map((row) => row.slice(n));
 }
 
-function runOLS(rows: Row[], outcome: string, predictors: string[]) {
+function addMatrices(a: number[][], b: number[][], factor = 1) {
+  return a.map((row, i) => row.map((value, j) => value + factor * b[i][j]));
+}
+
+function scaleMatrix(matrix: number[][], factor: number) {
+  return matrix.map((row) => row.map((value) => value * factor));
+}
+
+function clusterMeat(x: number[][], residuals: number[], ids: string[]) {
+  const groups = new Map<string, number[]>();
+  ids.forEach((id, i) => {
+    const score = groups.get(id) ?? Array(x[0].length).fill(0);
+    x[i].forEach((value, j) => { score[j] += value * residuals[i]; });
+    groups.set(id, score);
+  });
+  if (groups.size < 2) throw new Error("聚类变量至少需要两个不同的组");
+  const meat = Array.from({ length: x[0].length }, () => Array(x[0].length).fill(0));
+  groups.forEach((score) => {
+    score.forEach((left, i) => score.forEach((right, j) => {
+      meat[i][j] += left * right;
+    }));
+  });
+  return { meat, groups: groups.size };
+}
+
+function runOLS(
+  rows: Row[],
+  outcome: string,
+  predictors: string[],
+  seType: SEType,
+  cluster1: string,
+  cluster2: string,
+) {
+  if (!outcome || !predictors.length) throw new Error("请选择被解释变量和至少一个解释变量");
   const clean = rows
     .map((row) => ({
       y: Number(row[outcome]),
       x: [1, ...predictors.map((name) => Number(row[name]))],
+      cluster1: cluster1 ? row[cluster1] : "",
+      cluster2: cluster2 ? row[cluster2] : "",
     }))
-    .filter(({ y, x }) => Number.isFinite(y) && x.every(Number.isFinite));
+    .filter(({ y, x, cluster1: first, cluster2: second }) =>
+      Number.isFinite(y) &&
+      x.every(Number.isFinite) &&
+      (seType === "classical" || seType === "hc1" || first !== "") &&
+      (seType !== "cluster-two" || second !== ""),
+    );
   if (clean.length <= predictors.length + 2) throw new Error("有效样本量不足");
   const x = clean.map((item) => item.x);
   const y = clean.map((item) => [item.y]);
@@ -118,9 +163,40 @@ function runOLS(rows: Row[], outcome: string, predictors: string[]) {
   const residuals = clean.map((item, i) => item.y - multiply([item.x], beta.map((v) => [v]))[0][0]);
   const degrees = clean.length - beta.length;
   const sigma2 = residuals.reduce((sum, value) => sum + value * value, 0) / degrees;
-  const standardErrors = xtxInverse.map((row, i) =>
-    Math.sqrt(Math.max(0, sigma2 * row[i])),
-  );
+  let covariance = scaleMatrix(xtxInverse, sigma2);
+  let clusterCounts: number[] = [];
+  if (seType === "hc1") {
+    const meat = x[0].map((_, i) => x[0].map((__, j) =>
+      x.reduce((sum, row, r) => sum + row[i] * row[j] * residuals[r] ** 2, 0),
+    ));
+    covariance = scaleMatrix(
+      multiply(multiply(xtxInverse, meat), xtxInverse),
+      clean.length / degrees,
+    );
+  }
+  if (seType === "cluster-one" || seType === "cluster-two") {
+    if (!cluster1) throw new Error("请选择第一聚类变量");
+    const first = clusterMeat(x, residuals, clean.map((item) => item.cluster1));
+    const correction1 = (first.groups / (first.groups - 1)) * ((clean.length - 1) / degrees);
+    let combinedMeat = scaleMatrix(first.meat, correction1);
+    clusterCounts = [first.groups];
+    if (seType === "cluster-two") {
+      if (!cluster2 || cluster1 === cluster2) throw new Error("请选择两个不同的聚类变量");
+      const second = clusterMeat(x, residuals, clean.map((item) => item.cluster2));
+      const intersection = clusterMeat(
+        x,
+        residuals,
+        clean.map((item) => `${item.cluster1}\u241f${item.cluster2}`),
+      );
+      const correction2 = (second.groups / (second.groups - 1)) * ((clean.length - 1) / degrees);
+      const correction12 = (intersection.groups / (intersection.groups - 1)) * ((clean.length - 1) / degrees);
+      combinedMeat = addMatrices(combinedMeat, scaleMatrix(second.meat, correction2));
+      combinedMeat = addMatrices(combinedMeat, scaleMatrix(intersection.meat, correction12), -1);
+      clusterCounts = [first.groups, second.groups];
+    }
+    covariance = multiply(multiply(xtxInverse, combinedMeat), xtxInverse);
+  }
+  const standardErrors = covariance.map((row, i) => Math.sqrt(Math.max(0, row[i])));
   const meanY = clean.reduce((sum, item) => sum + item.y, 0) / clean.length;
   const tss = clean.reduce((sum, item) => sum + (item.y - meanY) ** 2, 0);
   const rss = residuals.reduce((sum, value) => sum + value ** 2, 0);
@@ -134,6 +210,7 @@ function runOLS(rows: Row[], outcome: string, predictors: string[]) {
     })),
     n: clean.length,
     r2: 1 - rss / tss,
+    clusterCounts,
   };
 }
 
@@ -141,13 +218,13 @@ export default function Home() {
   const [rows, setRows] = useState<Row[]>(demoRows);
   const [fileName, setFileName] = useState("内置演示数据");
   const [outcome, setOutcome] = useState("income");
-  const [predictors, setPredictors] = useState<string[]>([
-    "treatment",
-    "education",
-    "experience",
-  ]);
+  const [primaryX, setPrimaryX] = useState("treatment");
+  const [controls, setControls] = useState<string[]>(["education", "experience"]);
+  const [seType, setSeType] = useState<SEType>("cluster-two");
+  const [cluster1, setCluster1] = useState("firm_id");
+  const [cluster2, setCluster2] = useState("year");
   const [estimates, setEstimates] = useState<Estimate[]>([]);
-  const [fit, setFit] = useState<{ n: number; r2: number } | null>(null);
+  const [fit, setFit] = useState<{ n: number; r2: number; clusterCounts: number[] } | null>(null);
   const [error, setError] = useState("");
   const [supportOpen, setSupportOpen] = useState(false);
 
@@ -170,6 +247,16 @@ export default function Home() {
     });
   }, [columns, rows]);
   const numericColumns = profiles.filter((item) => item.type === "数值").map((item) => item.name);
+  const predictors = useMemo(
+    () => [primaryX, ...controls].filter((item, i, all) => item && all.indexOf(item) === i),
+    [primaryX, controls],
+  );
+  const seLabel = {
+    classical: "经典标准误",
+    hc1: "HC1 异方差稳健",
+    "cluster-one": `聚类：${cluster1 || "未选择"}`,
+    "cluster-two": `双向聚类：${cluster1 || "?"} × ${cluster2 || "?"}`,
+  }[seType];
   const missingCount = profiles.reduce((sum, item) => sum + item.missing, 0);
 
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
@@ -189,7 +276,13 @@ export default function Home() {
       setRows(parsed);
       setFileName(file.name);
       setOutcome(numeric[0] ?? "");
-      setPredictors(numeric.slice(1, 4));
+      setPrimaryX(numeric[1] ?? "");
+      setControls(numeric.slice(2, 4));
+      const firmGuess = names.find((name) => /firm|company|corp|企业|公司|个体|unit|id/i.test(name)) ?? "";
+      const yearGuess = names.find((name) => /year|年份|年度|time/i.test(name)) ?? "";
+      setCluster1(firmGuess);
+      setCluster2(yearGuess);
+      setSeType(firmGuess && yearGuess ? "cluster-two" : "hc1");
       setEstimates([]);
       setFit(null);
       setError("");
@@ -199,9 +292,9 @@ export default function Home() {
 
   function estimate() {
     try {
-      const result = runOLS(rows, outcome, predictors);
+      const result = runOLS(rows, outcome, predictors, seType, cluster1, cluster2);
       setEstimates(result.estimates);
-      setFit({ n: result.n, r2: result.r2 });
+      setFit({ n: result.n, r2: result.r2, clusterCounts: result.clusterCounts });
       setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "模型估计失败");
@@ -313,7 +406,7 @@ export default function Home() {
             <span className="step">02 / 模型设定</span>
             <h2>用清晰的语言定义模型</h2>
           </div>
-          <span className="methodBadge">OLS · 经典标准误</span>
+          <span className="methodBadge">OLS · {seLabel}</span>
         </div>
         <div className="modelBuilder">
           <div className="field">
@@ -323,30 +416,77 @@ export default function Home() {
             </select>
           </div>
           <div className="formulaSymbol">=</div>
-          <div className="field predictors">
-            <label>解释变量 X（点击选择）</label>
-            <div className="variableChoices">
+          <div className="field">
+            <label htmlFor="primary-x">核心解释变量 X</label>
+            <select id="primary-x" value={primaryX} onChange={(e) => {
+              setPrimaryX(e.target.value);
+              setControls((current) => current.filter((item) => item !== e.target.value));
+            }}>
               {numericColumns.filter((column) => column !== outcome).map((column) => (
+                <option key={column}>{column}</option>
+              ))}
+            </select>
+          </div>
+          <button className="runButton" onClick={estimate}>运行回归 <span>↗</span></button>
+        </div>
+        <div className="controlsBuilder">
+          <div className="field predictors">
+            <label>控制变量（可多选）</label>
+            <div className="variableChoices">
+              {numericColumns.filter((column) => column !== outcome && column !== primaryX).map((column) => (
                 <button
                   key={column}
-                  className={predictors.includes(column) ? "selected" : ""}
-                  onClick={() => setPredictors((current) =>
+                  className={controls.includes(column) ? "selected" : ""}
+                  onClick={() => setControls((current) =>
                     current.includes(column)
                       ? current.filter((item) => item !== column)
                       : [...current, column],
                   )}
                 >
-                  {column}<span>{predictors.includes(column) ? "×" : "+"}</span>
+                  {column}<span>{controls.includes(column) ? "×" : "+"}</span>
                 </button>
               ))}
             </div>
           </div>
-          <button className="runButton" onClick={estimate}>运行回归 <span>↗</span></button>
+        </div>
+        <div className="inferenceBuilder">
+          <div className="field">
+            <label htmlFor="se-type">标准误类型</label>
+            <select id="se-type" value={seType} onChange={(e) => setSeType(e.target.value as SEType)}>
+              <option value="classical">经典标准误</option>
+              <option value="hc1">HC1 异方差稳健</option>
+              <option value="cluster-one">一维聚类</option>
+              <option value="cluster-two">企业 × 年份双向聚类</option>
+            </select>
+          </div>
+          {(seType === "cluster-one" || seType === "cluster-two") && (
+            <div className="field">
+              <label htmlFor="cluster-one">第一聚类变量（通常为企业）</label>
+              <select id="cluster-one" value={cluster1} onChange={(e) => setCluster1(e.target.value)}>
+                <option value="">请选择</option>
+                {columns.map((column) => <option key={column}>{column}</option>)}
+              </select>
+            </div>
+          )}
+          {seType === "cluster-two" && (
+            <div className="field">
+              <label htmlFor="cluster-two">第二聚类变量（通常为年份）</label>
+              <select id="cluster-two" value={cluster2} onChange={(e) => setCluster2(e.target.value)}>
+                <option value="">请选择</option>
+                {columns.map((column) => <option key={column}>{column}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="inferenceSummary">
+            <span>当前推断</span>
+            <strong>{seLabel}</strong>
+            <small>双向聚类采用企业、年份及交集项的有限样本修正。</small>
+          </div>
         </div>
         {error && <p className="error">{error}</p>}
         <p className="modelNote">
-          当前版本提供教学与初步探索用途的基准 OLS。正式研究需要进一步核查识别假设、
-          聚类层级、固定效应及稳健性。
+          控制变量进入同一回归方程；聚类变量只调整统计推断，不改变系数。企业数或年份数很少时，
+          常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。
         </p>
       </section>
 
@@ -363,8 +503,12 @@ export default function Home() {
             <div className="fitStrip">
               <div><span>有效样本</span><strong>{fit?.n}</strong></div>
               <div><span>R²</span><strong>{fit?.r2.toFixed(4)}</strong></div>
-              <div><span>解释变量</span><strong>{predictors.length}</strong></div>
-              <p>系数衡量在其他变量保持不变时，解释变量每增加一个单位与 Y 的平均变化关系。</p>
+              <div><span>控制变量</span><strong>{controls.length}</strong></div>
+              <p>
+                {seLabel}
+                {fit?.clusterCounts.length ? `；聚类组数 ${fit.clusterCounts.join(" × ")}` : ""}
+                。核心解释变量系数是在控制其他变量后的条件相关关系。
+              </p>
             </div>
             <div className="resultTable">
               <div className="tableHead"><span>变量</span><span>系数</span><span>标准误</span><span>t 值</span><span>95% 区间（近似）</span></div>

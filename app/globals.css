@@ -103,6 +103,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .sectionHeading.light h2 { color: white; }
 .methodBadge { color: var(--lime); border-color: rgba(200,243,90,.22); background: rgba(0,0,0,.14); }
 .modelBuilder { display: grid; grid-template-columns: 1fr auto 2fr auto; gap: 22px; align-items: end; border-top: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); padding: 35px 0; }
+.controlsBuilder { padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.inferenceBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 1.3fr; gap: 14px; align-items: end; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .field label { display: block; color: #aebfb8; font-size: 11px; margin-bottom: 12px; }
 .field select { width: 100%; min-height: 52px; padding: 0 16px; background: rgba(255,255,255,.08); color: white; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; }
 .field select option { color: #111; }
@@ -114,6 +116,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .runButton { border: 0; background: var(--lime); color: var(--ink); padding: 16px 21px; border-radius: 10px; font-weight: 750; cursor: pointer; white-space: nowrap; }
 .runButton:hover { background: #d7ff6e; }
 .runButton span { margin-left: 11px; }
+.inferenceSummary { min-height: 74px; border: 1px solid rgba(200,243,90,.22); background: rgba(0,0,0,.14); border-radius: 10px; padding: 12px 14px; }
+.inferenceSummary span, .inferenceSummary small { display: block; color: #aebfb8; font-size: 10px; line-height: 1.5; }
+.inferenceSummary strong { display: block; color: var(--lime); font-size: 13px; margin: 5px 0; }
 .modelNote { color: #aebfb8; line-height: 1.7; max-width: 790px; font-size: 12px; margin: 20px 0 0; }
 .error { background: #7a312b; color: #ffe9e6; border-radius: 9px; padding: 12px 15px; margin-top: 16px; }
 
@@ -162,6 +167,7 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .heroPanel { transform: none; }
   .profileGrid { grid-template-columns: repeat(2, 1fr); }
   .modelBuilder { grid-template-columns: 1fr; }
+  .inferenceBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .formulaSymbol { display: none; }
   .runButton { width: 100%; }
   .fitStrip { grid-template-columns: repeat(3,1fr); }
@@ -181,6 +187,7 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .heroPanel { padding: 20px; }
   .miniChart { height: 160px; }
   .profileGrid { grid-template-columns: 1fr; }
+  .inferenceBuilder { grid-template-columns: 1fr; }
   .sectionHeading { align-items: flex-start; flex-direction: column; }
   .fitStrip { grid-template-columns: repeat(2,1fr); }
   .fitStrip div:nth-child(2) { border-right: 0; }
