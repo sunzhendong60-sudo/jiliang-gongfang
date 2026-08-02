@@ -1,6 +1,8 @@
 "use client";
 
 import { ChangeEvent, useMemo, useState } from "react";
+import { RandomForestRegression } from "ml-random-forest";
+import { DecisionTreeRegression } from "ml-cart";
 
 type Row = Record<string, string>;
 type Profile = {
@@ -20,7 +22,25 @@ type Estimate = {
 };
 type SEType = "classical" | "hc1" | "cluster-one" | "cluster-two";
 type FEType = "none" | "one" | "two";
-type AnalysisType = "regression" | "mediation" | "robustness";
+type AnalysisType = "regression" | "mediation" | "robustness" | "dml";
+type DMLModel = "plr" | "pliv";
+type MLLearner = "lasso" | "random-forest" | "gradient-boosting";
+type DMLResult = {
+  coefficient: number;
+  standardError: number;
+  statistic: number;
+  ciLow: number;
+  ciHigh: number;
+  n: number;
+  folds: number;
+  learner: MLLearner;
+  model: DMLModel;
+  nuisanceR2Y: number;
+  nuisanceR2D: number;
+  nuisanceR2Z: number | null;
+  firstStageF: number | null;
+  clusters: number | null;
+};
 type RobustnessKind = "winsor" | "lag" | "trim-years" | "alternative-x" | "alternative-y";
 type RobustnessRow = {
   key: string;
@@ -44,7 +64,7 @@ type MediationResult = {
   bootstrapValid: number;
   mediatedShare: number | null;
 };
-const APP_VERSION = "2026.08.02.4";
+const APP_VERSION = "2026.08.02.5";
 
 const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
   const firm = Math.floor(i / 6) + 1;
@@ -560,6 +580,202 @@ function runRobustnessSuite(
   return output;
 }
 
+function standardizeTrainTest(train: number[][], test: number[][]) {
+  if (!train[0]?.length) return { train, test };
+  const means = train[0].map((_, column) => train.reduce((sum, row) => sum + row[column], 0) / train.length);
+  const scales = means.map((mean, column) => {
+    const variance = train.reduce((sum, row) => sum + (row[column] - mean) ** 2, 0) / Math.max(1, train.length - 1);
+    return Math.sqrt(variance) || 1;
+  });
+  const apply = (matrix: number[][]) => matrix.map((row) => row.map((value, column) => (value - means[column]) / scales[column]));
+  return { train: apply(train), test: apply(test) };
+}
+
+function ridgePredict(trainX: number[][], trainY: number[], testX: number[][]) {
+  if (!trainX[0]?.length) {
+    const mean = trainY.reduce((sum, value) => sum + value, 0) / trainY.length;
+    return testX.map(() => mean);
+  }
+  const x = trainX.map((row) => [1, ...row]);
+  const xtx = multiply(transpose(x), x);
+  const lambda = 0.01;
+  const regularized = xtx.map((row, i) => row.map((value, j) => value + (i === j && i > 0 ? lambda : 0)));
+  const beta = multiply(multiply(inverse(regularized), transpose(x)), trainY.map((value) => [value])).map((row) => row[0]);
+  return testX.map((row) => beta[0] + row.reduce((sum, value, column) => sum + value * beta[column + 1], 0));
+}
+
+function lassoPredict(trainX: number[][], trainY: number[], testX: number[][]) {
+  if (!trainX[0]?.length) return ridgePredict(trainX, trainY, testX);
+  const meanY = trainY.reduce((sum, value) => sum + value, 0) / trainY.length;
+  const centeredY = trainY.map((value) => value - meanY);
+  const coefficients = Array(trainX[0].length).fill(0);
+  const fitted = trainY.map(() => 0);
+  const lambdaMax = trainX[0].reduce((maximum, _, column) => {
+    const score = Math.abs(trainX.reduce((sum, row, i) => sum + row[column] * centeredY[i], 0) / trainX.length);
+    return Math.max(maximum, score);
+  }, 0);
+  const lambda = Math.max(1e-5, lambdaMax * 0.02);
+  for (let iteration = 0; iteration < 300; iteration++) {
+    let largestChange = 0;
+    for (let column = 0; column < coefficients.length; column++) {
+      let rho = 0;
+      let scale = 0;
+      for (let row = 0; row < trainX.length; row++) {
+        const value = trainX[row][column];
+        rho += value * (centeredY[row] - fitted[row] + value * coefficients[column]);
+        scale += value * value;
+      }
+      rho /= trainX.length;
+      scale /= trainX.length;
+      const updated = scale > 1e-12 ? Math.sign(rho) * Math.max(0, Math.abs(rho) - lambda) / scale : 0;
+      const change = updated - coefficients[column];
+      if (change !== 0) trainX.forEach((row, index) => { fitted[index] += row[column] * change; });
+      coefficients[column] = updated;
+      largestChange = Math.max(largestChange, Math.abs(change));
+    }
+    if (largestChange < 1e-7) break;
+  }
+  return testX.map((row) => meanY + row.reduce((sum, value, column) => sum + value * coefficients[column], 0));
+}
+
+function gradientBoostingPredict(trainX: number[][], trainY: number[], testX: number[][]) {
+  if (!trainX[0]?.length) return ridgePredict(trainX, trainY, testX);
+  const base = trainY.reduce((sum, value) => sum + value, 0) / trainY.length;
+  const trainPrediction = trainY.map(() => base);
+  const testPrediction = testX.map(() => base);
+  const learningRate = 0.08;
+  for (let iteration = 0; iteration < 30; iteration++) {
+    const residuals = trainY.map((value, i) => value - trainPrediction[i]);
+    const tree = new DecisionTreeRegression({ maxDepth: 2, minNumSamples: Math.max(5, Math.floor(trainY.length * 0.01)) });
+    tree.train(trainX, residuals);
+    tree.predict(trainX).forEach((value, i) => { trainPrediction[i] += learningRate * value; });
+    tree.predict(testX).forEach((value, i) => { testPrediction[i] += learningRate * value; });
+  }
+  return testPrediction;
+}
+
+function learnerPredict(learner: MLLearner, trainX: number[][], trainY: number[], testX: number[][], seed: number) {
+  const standardized = standardizeTrainTest(trainX, testX);
+  if (learner === "lasso") return lassoPredict(standardized.train, trainY, standardized.test);
+  if (learner === "gradient-boosting") return gradientBoostingPredict(standardized.train, trainY, standardized.test);
+  if (!standardized.train[0]?.length) return ridgePredict(standardized.train, trainY, standardized.test);
+  const forest = new RandomForestRegression({
+    nEstimators: 30,
+    maxFeatures: Math.max(1, Math.floor(Math.sqrt(standardized.train[0].length))),
+    replacement: true,
+    seed,
+    useSampleBagging: true,
+    noOOB: true,
+    treeOptions: { maxDepth: 6, minNumSamples: Math.max(5, Math.floor(trainY.length * 0.005)) },
+  });
+  forest.train(standardized.train, trainY);
+  return forest.predict(standardized.test);
+}
+
+function deterministicFolds(ids: string[], folds: number) {
+  const unique = Array.from(new Set(ids));
+  if (unique.length < folds) throw new Error(`交叉拟合分组数少于 ${folds}，请减少折数或取消分组`);
+  const random = seededRandom(20260802);
+  for (let i = unique.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [unique[i], unique[j]] = [unique[j], unique[i]];
+  }
+  const map = new Map(unique.map((id, index) => [id, index % folds]));
+  return ids.map((id) => map.get(id) ?? 0);
+}
+
+function outOfSampleR2(actual: number[], predicted: number[]) {
+  const mean = actual.reduce((sum, value) => sum + value, 0) / actual.length;
+  const tss = actual.reduce((sum, value) => sum + (value - mean) ** 2, 0);
+  const rss = actual.reduce((sum, value, i) => sum + (value - predicted[i]) ** 2, 0);
+  return tss > 1e-12 ? 1 - rss / tss : 0;
+}
+
+function runDML(
+  rows: Row[],
+  outcome: string,
+  treatment: string,
+  controls: string[],
+  model: DMLModel,
+  instrument: string,
+  learner: MLLearner,
+  folds: number,
+  foldGroup: string,
+  feType: FEType,
+  fixedEffect1: string,
+  fixedEffect2: string,
+): DMLResult {
+  if (!controls.length) throw new Error("双重机器学习至少需要一个控制变量 / 特征");
+  if (model === "pliv" && !instrument) throw new Error("DML-IV 必须选择一个有效工具变量 Z");
+  const variables = [outcome, treatment, ...(model === "pliv" ? [instrument] : []), ...controls];
+  const cleanRows = rows.filter((row) => variables.every((variable) => Number.isFinite(Number(row[variable]))) &&
+    (!foldGroup || row[foldGroup] !== "") && (feType === "none" || row[fixedEffect1] !== "") && (feType !== "two" || row[fixedEffect2] !== ""));
+  if (cleanRows.length < Math.max(50, folds * 10)) throw new Error(`有效样本量至少需要 ${Math.max(50, folds * 10)} 条`);
+  let matrix = cleanRows.map((row) => variables.map((variable) => Number(row[variable])));
+  if (feType !== "none") {
+    const feIds = [cleanRows.map((row) => row[fixedEffect1]), ...(feType === "two" ? [cleanRows.map((row) => row[fixedEffect2])] : [])];
+    matrix = absorbFixedEffects(matrix, feIds);
+  }
+  const zOffset = model === "pliv" ? 2 : -1;
+  const controlOffset = model === "pliv" ? 3 : 2;
+  const y = matrix.map((row) => row[0]);
+  const d = matrix.map((row) => row[1]);
+  const z = model === "pliv" ? matrix.map((row) => row[zOffset]) : null;
+  const x = matrix.map((row) => row.slice(controlOffset));
+  const foldIds = foldGroup ? cleanRows.map((row) => row[foldGroup]) : cleanRows.map((_, index) => String(index));
+  const assignments = deterministicFolds(foldIds, folds);
+  const yHat = Array(y.length).fill(0);
+  const dHat = Array(d.length).fill(0);
+  const zHat = z ? Array(z.length).fill(0) : null;
+  for (let fold = 0; fold < folds; fold++) {
+    const train = assignments.map((value, index) => value !== fold ? index : -1).filter((index) => index >= 0);
+    const test = assignments.map((value, index) => value === fold ? index : -1).filter((index) => index >= 0);
+    if (!train.length || !test.length) throw new Error("交叉拟合出现空折，请调整折数");
+    const trainX = train.map((index) => x[index]);
+    const testX = test.map((index) => x[index]);
+    const assign = (target: number[], predictions: number[]) => test.forEach((index, position) => { target[index] = predictions[position]; });
+    assign(yHat, learnerPredict(learner, trainX, train.map((index) => y[index]), testX, 100 + fold));
+    assign(dHat, learnerPredict(learner, trainX, train.map((index) => d[index]), testX, 200 + fold));
+    if (z && zHat) assign(zHat, learnerPredict(learner, trainX, train.map((index) => z[index]), testX, 300 + fold));
+  }
+  const yResidual = y.map((value, index) => value - yHat[index]);
+  const dResidual = d.map((value, index) => value - dHat[index]);
+  const zResidual = z && zHat ? z.map((value, index) => value - zHat[index]) : null;
+  const scoreRegressor = zResidual ?? dResidual;
+  const denominator = scoreRegressor.reduce((sum, value, index) => sum + value * dResidual[index], 0);
+  if (Math.abs(denominator) < 1e-10) throw new Error(model === "pliv" ? "工具变量净变动与处理变量净变动相关性过弱" : "处理变量在控制特征后缺乏剩余变动");
+  const coefficient = scoreRegressor.reduce((sum, value, index) => sum + value * yResidual[index], 0) / denominator;
+  const scores = scoreRegressor.map((value, index) => value * (yResidual[index] - coefficient * dResidual[index]));
+  let varianceNumerator: number;
+  let clusterCount: number | null = null;
+  if (foldGroup) {
+    const grouped = new Map<string, number>();
+    cleanRows.forEach((row, index) => grouped.set(row[foldGroup], (grouped.get(row[foldGroup]) ?? 0) + scores[index]));
+    clusterCount = grouped.size;
+    varianceNumerator = (clusterCount / Math.max(1, clusterCount - 1)) * Array.from(grouped.values()).reduce((sum, value) => sum + value ** 2, 0);
+  } else {
+    varianceNumerator = scores.reduce((sum, value) => sum + value ** 2, 0);
+  }
+  const standardError = Math.sqrt(varianceNumerator) / Math.abs(denominator);
+  let firstStageF: number | null = null;
+  if (zResidual) {
+    const zz = zResidual.reduce((sum, value) => sum + value ** 2, 0);
+    const firstStage = denominator / zz;
+    const residual = dResidual.map((value, index) => value - firstStage * zResidual[index]);
+    const sigma2 = residual.reduce((sum, value) => sum + value ** 2, 0) / Math.max(1, residual.length - 1);
+    const firstStageSE = Math.sqrt(sigma2 / zz);
+    firstStageF = (firstStage / firstStageSE) ** 2;
+  }
+  return {
+    coefficient, standardError, statistic: coefficient / standardError,
+    ciLow: coefficient - 1.96 * standardError, ciHigh: coefficient + 1.96 * standardError,
+    n: cleanRows.length, folds, learner, model,
+    nuisanceR2Y: outOfSampleR2(y, yHat), nuisanceR2D: outOfSampleR2(d, dHat),
+    nuisanceR2Z: z && zHat ? outOfSampleR2(z, zHat) : null,
+    firstStageF, clusters: clusterCount,
+  };
+}
+
 function StataCell({ estimate }: { estimate?: Estimate }) {
   if (!estimate) return <span className="stataEmpty">—</span>;
   return (
@@ -622,6 +838,11 @@ export default function Home() {
   const [panelVariable, setPanelVariable] = useState("firm_id");
   const [timeVariable, setTimeVariable] = useState("year");
   const [excludedYears, setExcludedYears] = useState<string[]>([]);
+  const [dmlModel, setDmlModel] = useState<DMLModel>("plr");
+  const [dmlInstrument, setDmlInstrument] = useState("");
+  const [mlLearner, setMlLearner] = useState<MLLearner>("random-forest");
+  const [dmlFolds, setDmlFolds] = useState(5);
+  const [dmlFoldGroup, setDmlFoldGroup] = useState("firm_id");
   const [controls, setControls] = useState<string[]>(["education"]);
   const [seType, setSeType] = useState<SEType>("cluster-two");
   const [cluster1, setCluster1] = useState("firm_id");
@@ -639,6 +860,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [mediationResult, setMediationResult] = useState<MediationResult | null>(null);
   const [robustnessResults, setRobustnessResults] = useState<RobustnessRow[]>([]);
+  const [dmlResult, setDmlResult] = useState<DMLResult | null>(null);
   const [running, setRunning] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
 
@@ -718,12 +940,15 @@ export default function Home() {
       setPanelVariable(firmGuess);
       setTimeVariable(yearGuess);
       setExcludedYears([]);
+      setDmlInstrument("");
+      setDmlFoldGroup(firmGuess);
       setAlternativeX("");
       setAlternativeY("");
       setFeType(firmGuess && yearGuess ? "two" : "none");
       setEstimates([]);
       setMediationResult(null);
       setRobustnessResults([]);
+      setDmlResult(null);
       setFit(null);
       setError("");
     };
@@ -769,6 +994,19 @@ export default function Home() {
         setError("");
         return;
       }
+      if (analysisType === "dml") {
+        const result = runDML(
+          rows, outcome, primaryX, controls, dmlModel, dmlInstrument,
+          mlLearner, dmlFolds, dmlFoldGroup, feType, fixedEffect1, fixedEffect2,
+        );
+        setDmlResult(result);
+        setEstimates([]);
+        setMediationResult(null);
+        setRobustnessResults([]);
+        setFit(null);
+        setError("");
+        return;
+      }
       const result = runOLS(
         rows,
         outcome,
@@ -783,6 +1021,7 @@ export default function Home() {
       setEstimates(result.estimates);
       setMediationResult(null);
       setRobustnessResults([]);
+      setDmlResult(null);
       setFit({
         n: result.n,
         r2: result.r2,
@@ -809,6 +1048,15 @@ export default function Home() {
   }
 
   function exportResult() {
+    if (analysisType === "dml" && dmlResult) {
+      const result = dmlResult;
+      const csv = [
+        ["模型", "学习器", "系数", "标准误", "t值", "显著性", "95%CI下限", "95%CI上限", "样本量", "交叉拟合折数", "Y干扰模型R2", "D干扰模型R2", "Z干扰模型R2", "第一阶段F"].join(","),
+        [result.model.toUpperCase(), result.learner, result.coefficient, result.standardError, result.statistic, significanceStars(result.statistic), result.ciLow, result.ciHigh, result.n, result.folds, result.nuisanceR2Y, result.nuisanceR2D, result.nuisanceR2Z ?? "", result.firstStageF ?? ""].join(","),
+      ].join("\n");
+      downloadCSV(csv, "计量工坊_双重机器学习.csv");
+      return;
+    }
     if (analysisType === "robustness" && robustnessResults.length) {
       const csv = [
         ["稳健性检验", "系数", "标准误", "t值", "显著性", "样本量", "R2", "说明", "状态"].join(","),
@@ -957,12 +1205,12 @@ export default function Home() {
             <span className="step">02 / 模型设定</span>
             <h2>用清晰的语言定义模型</h2>
           </div>
-          <span className="methodBadge">OLS · {feLabel} · {seLabel}</span>
+          <span className="methodBadge">{analysisType === "dml" ? `DML · ${dmlModel.toUpperCase()} · ${feLabel}` : `OLS · ${feLabel} · ${seLabel}`}</span>
         </div>
         <div className="analysisTabs" role="group" aria-label="分析类型">
           <button
             className={analysisType === "regression" ? "active" : ""}
-            onClick={() => { setAnalysisType("regression"); setMediationResult(null); setRobustnessResults([]); setError(""); }}
+            onClick={() => { setAnalysisType("regression"); setMediationResult(null); setRobustnessResults([]); setDmlResult(null); setError(""); }}
           >基准回归</button>
           <button
             className={analysisType === "mediation" ? "active" : ""}
@@ -971,6 +1219,7 @@ export default function Home() {
               setControls((current) => current.filter((item) => item !== mediator));
               setEstimates([]);
               setRobustnessResults([]);
+              setDmlResult(null);
               setError("");
             }}
           >中介效应</button>
@@ -980,9 +1229,17 @@ export default function Home() {
               setAnalysisType("robustness");
               setEstimates([]);
               setMediationResult(null);
+              setDmlResult(null);
               setError("");
             }}
           >稳健性检验</button>
+          <button
+            className={analysisType === "dml" ? "active" : ""}
+            onClick={() => {
+              setAnalysisType("dml"); setEstimates([]); setMediationResult(null);
+              setRobustnessResults([]); setError("");
+            }}
+          >双重机器学习</button>
         </div>
         <div className="modelBuilder">
           <div className="field">
@@ -1004,7 +1261,7 @@ export default function Home() {
             </select>
           </div>
           <button className="runButton" onClick={estimate} disabled={running}>
-            {running ? "正在计算…" : analysisType === "mediation" ? "运行中介检验" : analysisType === "robustness" ? "运行稳健性检验" : "运行回归"} <span>↗</span>
+            {running ? "正在计算…" : analysisType === "mediation" ? "运行中介检验" : analysisType === "robustness" ? "运行稳健性检验" : analysisType === "dml" ? "运行 DML" : "运行回归"} <span>↗</span>
           </button>
         </div>
         {analysisType === "mediation" && (
@@ -1117,6 +1374,50 @@ export default function Home() {
             </div>
           </div>
         )}
+        {analysisType === "dml" && (
+          <div className="dmlBuilder">
+            <div className="field">
+              <label htmlFor="dml-model">识别模型</label>
+              <select id="dml-model" value={dmlModel} onChange={(e) => { setDmlModel(e.target.value as DMLModel); setDmlResult(null); }}>
+                <option value="plr">PLR：高维控制 / 非线性混杂</option>
+                <option value="pliv">PLIV：工具变量处理内生性</option>
+              </select>
+            </div>
+            {dmlModel === "pliv" && (
+              <div className="field">
+                <label htmlFor="dml-instrument">工具变量 Z</label>
+                <select id="dml-instrument" value={dmlInstrument} onChange={(e) => setDmlInstrument(e.target.value)}>
+                  <option value="">请选择有效工具变量</option>
+                  {numericColumns.filter((column) => column !== outcome && column !== primaryX && !controls.includes(column)).map((column) => <option key={column}>{column}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="field">
+              <label htmlFor="ml-learner">干扰项学习器</label>
+              <select id="ml-learner" value={mlLearner} onChange={(e) => setMlLearner(e.target.value as MLLearner)}>
+                <option value="lasso">Lasso（稀疏线性）</option>
+                <option value="random-forest">随机森林</option>
+                <option value="gradient-boosting">梯度提升树</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="dml-folds">交叉拟合折数</label>
+              <select id="dml-folds" value={dmlFolds} onChange={(e) => setDmlFolds(Number(e.target.value))}>
+                <option value={2}>2 折（较快）</option><option value={5}>5 折（推荐）</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="dml-fold-group">分组交叉拟合 / 聚类推断</label>
+              <select id="dml-fold-group" value={dmlFoldGroup} onChange={(e) => setDmlFoldGroup(e.target.value)}>
+                <option value="">不分组（按观测值）</option>{columns.map((column) => <option key={column}>{column}</option>)}
+              </select>
+            </div>
+            <div className="dmlNotice">
+              <strong>{dmlModel === "pliv" ? "PLIV 需要有效工具变量" : "PLR 不等于工具变量法"}</strong>
+              <p>{dmlModel === "pliv" ? "Z 必须满足相关性、排除限制与外生性；程序会报告残差化第一阶段 F。" : "PLR 假设控制特征后不存在未观测混杂，适合高维控制和非线性函数形式。"}</p>
+            </div>
+          </div>
+        )}
         <div className="controlsBuilder">
           <div className="field predictors">
             <label>控制变量（可多选）</label>
@@ -1173,7 +1474,7 @@ export default function Home() {
             <small>采用组内去均值与交替投影吸收，不展示大量虚拟变量系数。</small>
           </div>
         </div>
-        <div className="inferenceBuilder">
+        {analysisType !== "dml" && <div className="inferenceBuilder">
           <div className="field">
             <label htmlFor="se-type">标准误类型</label>
             <select id="se-type" value={seType} onChange={(e) => setSeType(e.target.value as SEType)}>
@@ -1206,7 +1507,7 @@ export default function Home() {
             <strong>{seLabel}</strong>
             <small>双向聚类采用企业、年份及交集项的有限样本修正。</small>
           </div>
-        </div>
+        </div>}
         {error && (
           <div className="error">
             <span>{error}</span>
@@ -1220,7 +1521,9 @@ export default function Home() {
               : "未使用 Bootstrap：结果按 Stata 风格展示系数、括号内 t 值与显著性星号。间接效应同时报告 Sobel 近似，但统计路径本身不会自动证明因果中介关系。"
             : analysisType === "robustness"
               ? "稳健性检验用于观察核心结论对变量处理、模型时序和样本区间的敏感度。替换变量需具有与原变量一致的经济含义；结果稳定也不能替代识别假设论证。"
-              : "固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。"}
+              : analysisType === "dml"
+                ? "DML 使用诚实交叉拟合：每条观测的干扰项预测都来自未包含该观测的训练折。分组交叉拟合可避免同一企业同时进入训练集和验证集。"
+                : "固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。"}
         </p>
       </section>
 
@@ -1228,11 +1531,33 @@ export default function Home() {
         <div className="sectionHeading">
           <div>
             <span className="step">03 / 估计结果</span>
-            <h2>{estimates.length || mediationResult || robustnessResults.length ? "结果已就绪" : "运行模型后查看结果"}</h2>
+            <h2>{estimates.length || mediationResult || robustnessResults.length || dmlResult ? "结果已就绪" : "运行模型后查看结果"}</h2>
           </div>
-          {(estimates.length > 0 || mediationResult || robustnessResults.length > 0) && <button className="exportButton" onClick={exportResult}>导出 CSV ↓</button>}
+          {(estimates.length > 0 || mediationResult || robustnessResults.length > 0 || dmlResult) && <button className="exportButton" onClick={exportResult}>导出 CSV ↓</button>}
         </div>
-        {analysisType === "robustness" && robustnessResults.length ? (
+        {analysisType === "dml" && dmlResult ? (
+          <>
+            <div className="dmlResultHero">
+              <div><span>正交化因果效应</span><strong>{dmlResult.coefficient.toFixed(4)}<sup>{significanceStars(dmlResult.statistic)}</sup></strong></div>
+              <div><span>标准误</span><strong>{dmlResult.standardError.toFixed(4)}</strong></div>
+              <div><span>t 值</span><strong>{dmlResult.statistic.toFixed(3)}</strong></div>
+              <div><span>95% 置信区间</span><strong>[{dmlResult.ciLow.toFixed(4)}, {dmlResult.ciHigh.toFixed(4)}]</strong></div>
+            </div>
+            <div className="dmlDiagnostics">
+              <article><span>模型</span><strong>{dmlResult.model.toUpperCase()}</strong><small>{dmlResult.model === "pliv" ? "工具变量 DML" : "部分线性 DML"}</small></article>
+              <article><span>学习器</span><strong>{{ lasso: "Lasso", "random-forest": "随机森林", "gradient-boosting": "梯度提升树" }[dmlResult.learner]}</strong><small>{dmlResult.folds} 折交叉拟合</small></article>
+              <article><span>样本与分组</span><strong>{dmlResult.n}</strong><small>{dmlResult.clusters ? `${dmlResult.clusters} 个聚类组` : "按观测值推断"}</small></article>
+              <article><span>Y 干扰模型 R²</span><strong>{dmlResult.nuisanceR2Y.toFixed(3)}</strong><small>样本外预测表现</small></article>
+              <article><span>D 干扰模型 R²</span><strong>{dmlResult.nuisanceR2D.toFixed(3)}</strong><small>样本外预测表现</small></article>
+              {dmlResult.model === "pliv" && <article className={(dmlResult.firstStageF ?? 0) < 10 ? "warning" : "good"}><span>残差化第一阶段 F</span><strong>{dmlResult.firstStageF?.toFixed(2)}</strong><small>{(dmlResult.firstStageF ?? 0) < 10 ? "可能存在弱工具变量风险" : "相关性诊断通过常用经验线"}</small></article>}
+            </div>
+            <div className="identificationNote">
+              <strong>识别解释</strong>
+              <p>{dmlResult.model === "pliv" ? "该估计只有在工具变量相关性、排除限制和外生性成立时，才能解释为处理变量的因果效应。第一阶段 F 不能检验排除限制。" : "该估计依赖控制变量充分性：给定所选控制特征后，不应仍存在同时影响 X 与 Y 的未观测混杂。若 X 确实内生，请改用 PLIV 并提供有效工具变量。"}</p>
+            </div>
+            <p className="resultFootnote">*** p&lt;0.01，** p&lt;0.05，* p&lt;0.10（双侧渐近近似）。所有干扰项指标均为交叉拟合的样本外 R²。</p>
+          </>
+        ) : analysisType === "robustness" && robustnessResults.length ? (
           <>
             <div className="robustnessOverview">
               <div><span>模型数量</span><strong>{robustnessResults.length}</strong></div>

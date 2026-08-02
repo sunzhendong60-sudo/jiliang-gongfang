@@ -109,6 +109,10 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .controlsBuilder { padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .mediationBuilder { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 2fr; align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .robustnessBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.dmlBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.dmlNotice { min-height: 74px; padding: 13px 15px; border: 1px solid rgba(200,243,90,.24); border-radius: 10px; background: rgba(0,0,0,.15); }
+.dmlNotice strong { color: var(--lime); font-size: 12px; }
+.dmlNotice p { margin: 7px 0 0; color: #aebfb8; font-size: 10px; line-height: 1.55; }
 .robustnessChecks { grid-column: 1/-1; }
 .robustnessSummary { min-height: 74px; }
 .excludedYearsField { grid-column: 1/-1; }
@@ -151,6 +155,23 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .error button:hover { background: rgba(255,255,255,.12); }
 
 .resultSection { min-height: 520px; }
+.dmlResultHero { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.dmlResultHero > div { min-height: 112px; padding: 19px; border: 1px solid var(--line); border-radius: 14px; background: #f7f6f0; }
+.dmlResultHero > div:first-child { background: var(--green); color: white; }
+.dmlResultHero span { display: block; margin-bottom: 12px; color: #77847f; font-size: 10px; }
+.dmlResultHero > div:first-child span { color: #b9cbc4; }
+.dmlResultHero strong { font-size: 21px; }
+.dmlResultHero > div:first-child strong { color: var(--lime); font-size: 27px; }
+.dmlResultHero sup { margin-left: 3px; font-size: 11px; }
+.dmlDiagnostics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+.dmlDiagnostics article { min-height: 116px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.dmlDiagnostics article.warning { border-color: #d8a397; background: #fff2ef; }
+.dmlDiagnostics article.good { border-color: #a8c88a; background: #f4f8e8; }
+.dmlDiagnostics span, .dmlDiagnostics small { display: block; color: #7a8782; font-size: 10px; }
+.dmlDiagnostics strong { display: block; margin: 9px 0; font-size: 18px; }
+.identificationNote { display: grid; grid-template-columns: 150px 1fr; gap: 24px; align-items: start; padding: 20px 22px; border-radius: 14px; background: #ece9dd; }
+.identificationNote strong { font-size: 13px; }
+.identificationNote p { margin: 0; color: #62706b; font-size: 12px; line-height: 1.7; }
 .robustnessOverview { display: grid; grid-template-columns: 140px 140px 140px 1fr; align-items: center; gap: 14px; margin-bottom: 16px; padding: 18px 22px; border-radius: 14px; background: #f1efe6; }
 .robustnessOverview div { border-right: 1px solid var(--line); }
 .robustnessOverview span { display: block; color: #7c8984; font-size: 10px; margin-bottom: 5px; }
@@ -247,9 +268,11 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mediationBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .robustnessBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dmlBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mediationPath { grid-column: 1/-1; }
   .mediationSummary { grid-template-columns: repeat(2, 1fr); }
   .robustnessOverview { grid-template-columns: repeat(3, 1fr); }
+  .dmlResultHero, .dmlDiagnostics { grid-template-columns: repeat(2, 1fr); }
   .robustnessOverview p { grid-column: 1/-1; }
   .robustnessTable { overflow-x: auto; }
   .robustnessHead, .robustnessRow { min-width: 850px; }
@@ -277,6 +300,8 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: 1fr; }
   .mediationBuilder, .mediationSummary { grid-template-columns: 1fr; }
   .robustnessBuilder, .robustnessOverview { grid-template-columns: 1fr; }
+  .dmlBuilder, .dmlResultHero, .dmlDiagnostics { grid-template-columns: 1fr; }
+  .identificationNote { grid-template-columns: 1fr; gap: 8px; }
   .stataHeader { align-items: flex-start; flex-direction: column; }
   .sectionHeading { align-items: flex-start; flex-direction: column; }
   .fitStrip { grid-template-columns: repeat(2,1fr); }
