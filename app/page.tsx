@@ -29,12 +29,12 @@ type MediationResult = {
   total: Estimate;
   indirect: number;
   indirectSE: number;
-  ciLow: number;
-  ciHigh: number;
+  ciLow: number | null;
+  ciHigh: number | null;
   bootstrapValid: number;
   mediatedShare: number | null;
 };
-const APP_VERSION = "2026.08.02.1";
+const APP_VERSION = "2026.08.02.2";
 
 const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
   const firm = Math.floor(i / 6) + 1;
@@ -365,6 +365,7 @@ function runMediation(
   exposure: string,
   mediator: string,
   controls: string[],
+  useBootstrap: boolean,
   bootstrapRepetitions: number,
   seType: SEType,
   cluster1: string,
@@ -389,27 +390,29 @@ function runMediation(
     b.coefficient ** 2 * a.estimate.standardError ** 2 +
     a.estimate.coefficient ** 2 * b.standardError ** 2,
   );
-  const random = seededRandom(20260802);
-  const bootstrapGroup = seType === "cluster-one" || seType === "cluster-two"
-    ? cluster1
-    : (feType !== "none" ? fixedEffect1 : "");
   const bootstrapEffects: number[] = [];
-  for (let repetition = 0; repetition < bootstrapRepetitions; repetition++) {
-    try {
-      const sample = resampleRows(rows, bootstrapGroup, random);
-      const bootA = estimateForTerm(
-        sample, mediator, [exposure, ...controls], exposure, ...common,
-      ).estimate.coefficient;
-      const bootB = estimateForTerm(
-        sample, outcome, [exposure, mediator, ...controls], mediator, ...common,
-      ).estimate.coefficient;
-      if (Number.isFinite(bootA * bootB)) bootstrapEffects.push(bootA * bootB);
-    } catch {
-      // Singular bootstrap draws are skipped and reported through the valid count.
+  if (useBootstrap) {
+    const random = seededRandom(20260802);
+    const bootstrapGroup = seType === "cluster-one" || seType === "cluster-two"
+      ? cluster1
+      : (feType !== "none" ? fixedEffect1 : "");
+    for (let repetition = 0; repetition < bootstrapRepetitions; repetition++) {
+      try {
+        const sample = resampleRows(rows, bootstrapGroup, random);
+        const bootA = estimateForTerm(
+          sample, mediator, [exposure, ...controls], exposure, ...common,
+        ).estimate.coefficient;
+        const bootB = estimateForTerm(
+          sample, outcome, [exposure, mediator, ...controls], mediator, ...common,
+        ).estimate.coefficient;
+        if (Number.isFinite(bootA * bootB)) bootstrapEffects.push(bootA * bootB);
+      } catch {
+        // Singular bootstrap draws are skipped and reported through the valid count.
+      }
     }
-  }
-  if (bootstrapEffects.length < Math.min(50, Math.floor(bootstrapRepetitions * 0.5))) {
-    throw new Error("有效 Bootstrap 重抽样次数不足，请减少变量、检查组内变动或改用更大的样本");
+    if (bootstrapEffects.length < Math.min(50, Math.floor(bootstrapRepetitions * 0.5))) {
+      throw new Error("有效 Bootstrap 重抽样次数不足，请减少变量、检查组内变动或改用更大的样本");
+    }
   }
   return {
     n: Math.min(a.n, outcomeModel.n, total.n),
@@ -419,13 +422,68 @@ function runMediation(
     total: total.estimate,
     indirect,
     indirectSE,
-    ciLow: percentile(bootstrapEffects, 0.025),
-    ciHigh: percentile(bootstrapEffects, 0.975),
+    ciLow: useBootstrap ? percentile(bootstrapEffects, 0.025) : null,
+    ciHigh: useBootstrap ? percentile(bootstrapEffects, 0.975) : null,
     bootstrapValid: bootstrapEffects.length,
     mediatedShare: Math.abs(total.estimate.coefficient) > 1e-12
       ? indirect / total.estimate.coefficient
       : null,
   };
+}
+
+function significanceStars(statistic: number) {
+  const absolute = Math.abs(statistic);
+  if (absolute >= 2.576) return "***";
+  if (absolute >= 1.96) return "**";
+  if (absolute >= 1.645) return "*";
+  return "";
+}
+
+function StataCell({ estimate }: { estimate?: Estimate }) {
+  if (!estimate) return <span className="stataEmpty">—</span>;
+  return (
+    <span className="stataEstimate">
+      <b>{estimate.coefficient.toFixed(4)}<sup>{significanceStars(estimate.statistic)}</sup></b>
+      <small>({estimate.statistic.toFixed(3)})</small>
+    </span>
+  );
+}
+
+function StataMediationTable({
+  result,
+  exposure,
+  mediator,
+  outcome,
+  controls,
+  feLabel,
+}: {
+  result: MediationResult;
+  exposure: string;
+  mediator: string;
+  outcome: string;
+  controls: number;
+  feLabel: string;
+}) {
+  return (
+    <div className="stataWrap">
+      <div className="stataTitle">中介效应逐步回归结果</div>
+      <div className="stataGrid stataColumns">
+        <span>变量</span><strong>(1)<small>{mediator}</small></strong>
+        <strong>(2)<small>{outcome}</small></strong><strong>(3)<small>{outcome}</small></strong>
+      </div>
+      <div className="stataGrid stataData">
+        <strong>{exposure}</strong><StataCell estimate={result.pathA} />
+        <StataCell estimate={result.direct} /><StataCell estimate={result.total} />
+        <strong>{mediator}</strong><StataCell /><StataCell estimate={result.pathB} /><StataCell />
+      </div>
+      <div className="stataGrid stataStats">
+        <span>控制变量</span><span>{controls ? "YES" : "NO"}</span><span>{controls ? "YES" : "NO"}</span><span>{controls ? "YES" : "NO"}</span>
+        <span>固定效应</span><span>{feLabel === "无固定效应" ? "NO" : "YES"}</span><span>{feLabel === "无固定效应" ? "NO" : "YES"}</span><span>{feLabel === "无固定效应" ? "NO" : "YES"}</span>
+        <span>Observations</span><span>{result.n}</span><span>{result.n}</span><span>{result.n}</span>
+      </div>
+      <div className="stataLegend">括号内为 t 值　*** p&lt;0.01，** p&lt;0.05，* p&lt;0.10（双侧渐近近似）</div>
+    </div>
+  );
 }
 
 export default function Home() {
@@ -435,6 +493,7 @@ export default function Home() {
   const [outcome, setOutcome] = useState("income");
   const [primaryX, setPrimaryX] = useState("treatment");
   const [mediator, setMediator] = useState("experience");
+  const [useBootstrap, setUseBootstrap] = useState(true);
   const [bootstrapRepetitions, setBootstrapRepetitions] = useState(200);
   const [controls, setControls] = useState<string[]>(["education"]);
   const [seType, setSeType] = useState<SEType>("cluster-two");
@@ -540,6 +599,7 @@ export default function Home() {
           primaryX,
           mediator,
           controls.filter((item) => item !== mediator),
+          useBootstrap,
           bootstrapRepetitions,
           seType,
           cluster1,
@@ -595,14 +655,23 @@ export default function Home() {
   function exportResult() {
     if (analysisType === "mediation" && mediationResult) {
       const result = mediationResult;
-      const csv = [
-        ["效应", "估计值", "标准误", "t值", "Bootstrap 95% CI下限", "Bootstrap 95% CI上限"].join(","),
-        ["路径a：X→M", result.pathA.coefficient, result.pathA.standardError, result.pathA.statistic, "", ""].join(","),
-        ["路径b：M→Y|X", result.pathB.coefficient, result.pathB.standardError, result.pathB.statistic, "", ""].join(","),
-        ["直接效应c'", result.direct.coefficient, result.direct.standardError, result.direct.statistic, "", ""].join(","),
-        ["总效应c", result.total.coefficient, result.total.standardError, result.total.statistic, "", ""].join(","),
-        ["间接效应a×b", result.indirect, result.indirectSE, result.indirect / result.indirectSE, result.ciLow, result.ciHigh].join(","),
-      ].join("\n");
+      const csv = useBootstrap
+        ? [
+            ["效应", "估计值", "标准误", "t值", "Bootstrap 95% CI下限", "Bootstrap 95% CI上限"].join(","),
+            ["路径a：X→M", result.pathA.coefficient, result.pathA.standardError, result.pathA.statistic, "", ""].join(","),
+            ["路径b：M→Y|X", result.pathB.coefficient, result.pathB.standardError, result.pathB.statistic, "", ""].join(","),
+            ["直接效应c'", result.direct.coefficient, result.direct.standardError, result.direct.statistic, "", ""].join(","),
+            ["总效应c", result.total.coefficient, result.total.standardError, result.total.statistic, "", ""].join(","),
+            ["间接效应a×b", result.indirect, result.indirectSE, result.indirect / result.indirectSE, result.ciLow, result.ciHigh].join(","),
+          ].join("\n")
+        : [
+            ["变量", `(1) ${mediator}`, `(2) ${outcome}`, `(3) ${outcome}（总效应）`].join(","),
+            [primaryX, `${result.pathA.coefficient}${significanceStars(result.pathA.statistic)}`, `${result.direct.coefficient}${significanceStars(result.direct.statistic)}`, `${result.total.coefficient}${significanceStars(result.total.statistic)}`].join(","),
+            ["t值", `(${result.pathA.statistic})`, `(${result.direct.statistic})`, `(${result.total.statistic})`].join(","),
+            [mediator, "", `${result.pathB.coefficient}${significanceStars(result.pathB.statistic)}`, ""].join(","),
+            ["t值", "", `(${result.pathB.statistic})`, ""].join(","),
+            ["N", result.n, result.n, result.n].join(","),
+          ].join("\n");
       downloadCSV(csv, "计量工坊_中介效应结果.csv");
       return;
     }
@@ -768,13 +837,19 @@ export default function Home() {
                 ))}
               </select>
             </div>
-            <div className="field">
-              <label htmlFor="bootstrap">Bootstrap 重抽样次数</label>
-              <select id="bootstrap" value={bootstrapRepetitions} onChange={(e) => setBootstrapRepetitions(Number(e.target.value))}>
-                <option value={200}>200（快速检查）</option>
-                <option value={500}>500（推荐）</option>
-                <option value={1000}>1000（更稳定）</option>
-              </select>
+            <div className="field bootstrapField">
+              <label>Bootstrap 检验</label>
+              <div className="bootstrapChoice" role="group" aria-label="是否使用 Bootstrap">
+                <button className={!useBootstrap ? "active" : ""} onClick={() => { setUseBootstrap(false); setMediationResult(null); }}>不使用</button>
+                <button className={useBootstrap ? "active" : ""} onClick={() => { setUseBootstrap(true); setMediationResult(null); }}>使用</button>
+              </div>
+              {useBootstrap && (
+                <select aria-label="Bootstrap 重抽样次数" value={bootstrapRepetitions} onChange={(e) => setBootstrapRepetitions(Number(e.target.value))}>
+                  <option value={200}>200 次（快速检查）</option>
+                  <option value={500}>500 次（推荐）</option>
+                  <option value={1000}>1000 次（更稳定）</option>
+                </select>
+              )}
             </div>
             <div className="mediationPath" aria-label="中介效应路径">
               <span>{primaryX || "X"}</span><b>→ a →</b><span>{mediator || "M"}</span><b>→ b →</b><span>{outcome || "Y"}</span>
@@ -880,7 +955,9 @@ export default function Home() {
         )}
         <p className="modelNote">
           {analysisType === "mediation"
-            ? "中介分析依次估计 X→M、X+M→Y 与 X→Y；间接效应使用 Bootstrap 百分位置信区间。该结果描述统计路径，不会自动证明因果中介关系。"
+            ? useBootstrap
+              ? "中介分析依次估计 X→M、X+M→Y 与 X→Y；间接效应使用 Bootstrap 百分位置信区间。该结果描述统计路径，不会自动证明因果中介关系。"
+              : "未使用 Bootstrap：结果按 Stata 风格展示系数、括号内 t 值与显著性星号。间接效应同时报告 Sobel 近似，但统计路径本身不会自动证明因果中介关系。"
             : "固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。"}
         </p>
       </section>
@@ -895,45 +972,58 @@ export default function Home() {
         </div>
         {analysisType === "mediation" && mediationResult ? (
           <>
-            <div className="mediationSummary">
-              <div><span>间接效应 a×b</span><strong>{mediationResult.indirect.toFixed(4)}</strong></div>
-              <div><span>Bootstrap 95% CI</span><strong>[{mediationResult.ciLow.toFixed(4)}, {mediationResult.ciHigh.toFixed(4)}]</strong></div>
-              <div><span>中介占比</span><strong>{mediationResult.mediatedShare === null ? "—" : `${(mediationResult.mediatedShare * 100).toFixed(1)}%`}</strong></div>
-              <div className={mediationResult.ciLow * mediationResult.ciHigh > 0 ? "mediationVerdict supported" : "mediationVerdict"}>
-                <span>Bootstrap 判断</span>
-                <strong>{mediationResult.ciLow * mediationResult.ciHigh > 0 ? "区间不含 0" : "区间包含 0"}</strong>
+            {useBootstrap && mediationResult.ciLow !== null && mediationResult.ciHigh !== null ? (
+              <div className="mediationSummary">
+                <div><span>间接效应 a×b</span><strong>{mediationResult.indirect.toFixed(4)}</strong></div>
+                <div><span>Bootstrap 95% CI</span><strong>[{mediationResult.ciLow.toFixed(4)}, {mediationResult.ciHigh.toFixed(4)}]</strong></div>
+                <div><span>中介占比</span><strong>{mediationResult.mediatedShare === null ? "—" : `${(mediationResult.mediatedShare * 100).toFixed(1)}%`}</strong></div>
+                <div className={mediationResult.ciLow * mediationResult.ciHigh > 0 ? "mediationVerdict supported" : "mediationVerdict"}>
+                  <span>Bootstrap 判断</span>
+                  <strong>{mediationResult.ciLow * mediationResult.ciHigh > 0 ? "区间不含 0" : "区间包含 0"}</strong>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="stataHeader">
+                <div><span>间接效应 a×b（Sobel）</span><strong>{mediationResult.indirect.toFixed(4)}{significanceStars(mediationResult.indirect / mediationResult.indirectSE)}</strong></div>
+                <p>系数在上，t 值在括号内；{feLabel}；{seLabel}</p>
+              </div>
+            )}
             <div className="fitStrip mediationFit">
               <div><span>有效样本</span><strong>{mediationResult.n}</strong></div>
-              <div><span>有效重抽样</span><strong>{mediationResult.bootstrapValid}</strong></div>
+              <div><span>{useBootstrap ? "有效重抽样" : "结果格式"}</span><strong>{useBootstrap ? mediationResult.bootstrapValid : "Stata"}</strong></div>
               <div><span>控制变量</span><strong>{controls.length}</strong></div>
-              <p>{feLabel}；{seLabel}。Bootstrap 按{(seType.startsWith("cluster") && cluster1) || (feType !== "none" && fixedEffect1) ? `“${cluster1 || fixedEffect1}”组` : "观测值"}重抽样。</p>
+              <p>{feLabel}；{seLabel}。{useBootstrap ? `Bootstrap 按${(seType.startsWith("cluster") && cluster1) || (feType !== "none" && fixedEffect1) ? `“${cluster1 || fixedEffect1}”组` : "观测值"}重抽样。` : "显著性星号采用双侧渐近临界值。"}</p>
             </div>
-            <div className="resultTable mediationTable">
-              <div className="tableHead"><span>效应路径</span><span>估计值</span><span>标准误</span><span>t / z 值</span><span>说明</span></div>
-              {[
-                ["路径 a：X → M", mediationResult.pathA, "X 对中介变量的影响"],
-                ["路径 b：M → Y｜X", mediationResult.pathB, "控制 X 后，M 对 Y 的影响"],
-                ["直接效应 c′", mediationResult.direct, "加入 M 后，X 对 Y 的效应"],
-                ["总效应 c", mediationResult.total, "未加入 M 时，X 对 Y 的效应"],
-              ].map(([label, value, note]) => {
-                const estimate = value as Estimate;
-                return <div className="tableRow" key={label as string}>
-                  <strong>{label as string}</strong><span>{estimate.coefficient.toFixed(4)}</span>
-                  <span>{estimate.standardError.toFixed(4)}</span>
-                  <span className={Math.abs(estimate.statistic) >= 1.96 ? "significant" : ""}>{estimate.statistic.toFixed(3)}</span>
-                  <span>{note as string}</span>
-                </div>;
-              })}
-              <div className="tableRow indirectRow">
-                <strong>间接效应 a × b</strong><span>{mediationResult.indirect.toFixed(4)}</span>
-                <span>{mediationResult.indirectSE.toFixed(4)}*</span>
-                <span>{(mediationResult.indirect / mediationResult.indirectSE).toFixed(3)}*</span>
-                <span>Bootstrap 95% CI [{mediationResult.ciLow.toFixed(4)}, {mediationResult.ciHigh.toFixed(4)}]</span>
-              </div>
-            </div>
-            <p className="resultFootnote">* 间接效应标准误与 z 值为 Sobel 近似；是否存在中介路径优先依据 Bootstrap 置信区间。中介占比在总效应接近 0、方向相反或存在抑制效应时不宜单独解读。</p>
+            {useBootstrap && mediationResult.ciLow !== null && mediationResult.ciHigh !== null ? (
+              <>
+                <div className="resultTable mediationTable">
+                  <div className="tableHead"><span>效应路径</span><span>估计值</span><span>标准误</span><span>t / z 值</span><span>说明</span></div>
+                  {[
+                    ["路径 a：X → M", mediationResult.pathA, "X 对中介变量的影响"],
+                    ["路径 b：M → Y｜X", mediationResult.pathB, "控制 X 后，M 对 Y 的影响"],
+                    ["直接效应 c′", mediationResult.direct, "加入 M 后，X 对 Y 的效应"],
+                    ["总效应 c", mediationResult.total, "未加入 M 时，X 对 Y 的效应"],
+                  ].map(([label, value, note]) => {
+                    const estimate = value as Estimate;
+                    return <div className="tableRow" key={label as string}>
+                      <strong>{label as string}</strong><span>{estimate.coefficient.toFixed(4)}</span>
+                      <span>{estimate.standardError.toFixed(4)}</span>
+                      <span className={Math.abs(estimate.statistic) >= 1.96 ? "significant" : ""}>{estimate.statistic.toFixed(3)}</span>
+                      <span>{note as string}</span>
+                    </div>;
+                  })}
+                  <div className="tableRow indirectRow">
+                    <strong>间接效应 a × b</strong><span>{mediationResult.indirect.toFixed(4)}</span>
+                    <span>{mediationResult.indirectSE.toFixed(4)}*</span>
+                    <span>{(mediationResult.indirect / mediationResult.indirectSE).toFixed(3)}*</span>
+                    <span>Bootstrap 95% CI [{mediationResult.ciLow.toFixed(4)}, {mediationResult.ciHigh.toFixed(4)}]</span>
+                  </div>
+                </div>
+                <p className="resultFootnote">* 间接效应标准误与 z 值为 Sobel 近似；是否存在中介路径优先依据 Bootstrap 置信区间。中介占比在总效应接近 0、方向相反或存在抑制效应时不宜单独解读。</p>
+              </>
+            ) : (
+              <StataMediationTable result={mediationResult} exposure={primaryX} mediator={mediator} outcome={outcome} controls={controls.length} feLabel={feLabel} />
+            )}
           </>
         ) : estimates.length ? (
           <>

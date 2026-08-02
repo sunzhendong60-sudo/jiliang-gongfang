@@ -112,6 +112,11 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .mediationPath span { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: white; color: var(--ink); border-radius: 7px; padding: 7px 10px; font-size: 12px; font-weight: 750; }
 .mediationPath b { color: var(--lime); font-size: 11px; }
 .mediationPath small { flex-basis: 100%; color: #aebfb8; text-align: center; font-size: 10px; }
+.bootstrapField { align-self: stretch; }
+.bootstrapChoice { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; min-height: 52px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(0,0,0,.12); }
+.bootstrapChoice button { border: 0; border-radius: 7px; color: #b9c9c3; background: transparent; cursor: pointer; font-weight: 700; }
+.bootstrapChoice button.active { color: var(--ink); background: var(--lime); }
+.bootstrapField .bootstrapChoice + select { margin-top: 8px; min-height: 42px; }
 .fixedEffectsBuilder,
 .inferenceBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 1.3fr; gap: 14px; align-items: end; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .field label { display: block; color: #aebfb8; font-size: 11px; margin-bottom: 12px; }
@@ -143,6 +148,28 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .mediationVerdict.supported { background: var(--green) !important; color: white; }
 .mediationVerdict.supported span { color: #b8cbc3; }
 .mediationVerdict.supported strong { color: var(--lime); }
+.stataHeader { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; padding: 19px 22px; border-radius: 14px; background: var(--green); color: white; }
+.stataHeader span { display: block; color: #b9cbc4; font-size: 10px; margin-bottom: 6px; }
+.stataHeader strong { color: var(--lime); font-size: 22px; }
+.stataHeader p { color: #c6d2cd; font-size: 12px; }
+.stataWrap { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: white; font-family: "SFMono-Regular", Consolas, monospace; }
+.stataTitle { padding: 17px 20px; text-align: center; font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-weight: 800; background: #f7f6f0; }
+.stataGrid { display: grid; grid-template-columns: 1.25fr repeat(3, 1fr); align-items: center; text-align: center; }
+.stataGrid > * { min-width: 0; padding: 12px 16px; }
+.stataGrid > *:first-child { text-align: left; }
+.stataColumns { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.stataColumns strong { font-size: 12px; }
+.stataColumns small { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; color: #65736e; font-weight: 500; }
+.stataData { border-bottom: 1px solid var(--ink); }
+.stataData > strong { font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.stataEstimate { display: flex; min-height: 62px; flex-direction: column; justify-content: center; gap: 6px; }
+.stataEstimate b { font-size: 13px; }
+.stataEstimate sup { color: #176d49; margin-left: 2px; }
+.stataEstimate small { color: #66746f; }
+.stataEmpty { color: #bdc5c1; }
+.stataStats { font-size: 11px; border-bottom: 2px solid var(--ink); }
+.stataStats > * { padding-top: 8px; padding-bottom: 8px; }
+.stataLegend { padding: 13px 20px; text-align: right; color: #6d7975; font-size: 10px; }
 .fitStrip { display: grid; grid-template-columns: 140px 140px 140px 1fr; align-items: center; background: #f1efe6; border-radius: 14px; padding: 18px 22px; margin-bottom: 16px; }
 .fitStrip div { border-right: 1px solid var(--line); margin-right: 20px; }
 .fitStrip span { display: block; font-size: 10px; color: #7c8984; margin-bottom: 5px; }
@@ -195,6 +222,8 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .mediationBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mediationPath { grid-column: 1/-1; }
   .mediationSummary { grid-template-columns: repeat(2, 1fr); }
+  .stataWrap { overflow-x: auto; }
+  .stataWrap > * { min-width: 680px; }
   .formulaSymbol { display: none; }
   .runButton { width: 100%; }
   .fitStrip { grid-template-columns: repeat(3,1fr); }
@@ -216,6 +245,7 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .profileGrid { grid-template-columns: 1fr; }
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: 1fr; }
   .mediationBuilder, .mediationSummary { grid-template-columns: 1fr; }
+  .stataHeader { align-items: flex-start; flex-direction: column; }
   .sectionHeading { align-items: flex-start; flex-direction: column; }
   .fitStrip { grid-template-columns: repeat(2,1fr); }
   .fitStrip div:nth-child(2) { border-right: 0; }
