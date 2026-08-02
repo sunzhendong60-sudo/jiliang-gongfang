@@ -111,6 +111,14 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .robustnessBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .robustnessChecks { grid-column: 1/-1; }
 .robustnessSummary { min-height: 74px; }
+.excludedYearsField { grid-column: 1/-1; }
+.yearChoices { display: flex; flex-wrap: wrap; gap: 8px; min-height: 52px; padding: 12px; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; background: rgba(0,0,0,.1); }
+.yearChoices button { display: flex; align-items: center; gap: 9px; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 10px 12px; color: #d2ded9; background: transparent; cursor: pointer; font-weight: 700; }
+.yearChoices button span { color: #8fa39b; font-size: 9px; font-weight: 500; }
+.yearChoices button.selected { border-color: var(--lime); color: var(--ink); background: var(--lime); }
+.yearChoices button.selected span { color: #43601e; }
+.yearChoices > small { align-self: center; color: #aebfb8; }
+.selectionHint { display: block; margin-top: 9px; color: var(--lime); font-size: 10px; }
 .mediationPath { min-height: 74px; display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; border: 1px solid rgba(200,243,90,.22); background: rgba(0,0,0,.14); border-radius: 10px; padding: 12px 14px; }
 .mediationPath span { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: white; color: var(--ink); border-radius: 7px; padding: 7px 10px; font-size: 12px; font-weight: 750; }
 .mediationPath b { color: var(--lime); font-size: 11px; }

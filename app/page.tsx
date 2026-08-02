@@ -44,7 +44,7 @@ type MediationResult = {
   bootstrapValid: number;
   mediatedShare: number | null;
 };
-const APP_VERSION = "2026.08.02.3";
+const APP_VERSION = "2026.08.02.4";
 
 const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
   const firm = Math.floor(i / 6) + 1;
@@ -500,6 +500,7 @@ function runRobustnessSuite(
   alternativeY: string,
   panelVariable: string,
   timeVariable: string,
+  excludedYears: string[],
   seType: SEType,
   cluster1: string,
   cluster2: string,
@@ -532,16 +533,20 @@ function runRobustnessSuite(
     }
   }
   if (checks.includes("trim-years")) {
-    const years = Array.from(new Set(rows.map((row) => Number(row[timeVariable])).filter(Number.isFinite))).sort((a, b) => a - b);
-    if (years.length >= 3) {
-      const first = years[0];
-      const last = years[years.length - 1];
-      run("trim-years", "调整样本年份区间", rows.filter((row) => {
-        const year = Number(row[timeVariable]);
-        return year > first && year < last;
-      }), outcome, exposure, `剔除首尾年份 ${first}、${last}`);
+    if (!timeVariable) {
+      output.push({ key: "trim-years", label: "剔除指定年份", estimate: null, n: null, r2: null, note: "按年份调整样本", error: "请选择年份 / 时间变量" });
+    } else if (excludedYears.length) {
+      const excluded = new Set(excludedYears);
+      run(
+        "trim-years",
+        "剔除指定年份",
+        rows.filter((row) => !excluded.has(row[timeVariable])),
+        outcome,
+        exposure,
+        `剔除 ${excludedYears.join("、")}`,
+      );
     } else {
-      output.push({ key: "trim-years", label: "调整样本年份区间", estimate: null, n: null, r2: null, note: "剔除首尾年份", error: "时间变量至少需要三个不同年份" });
+      output.push({ key: "trim-years", label: "剔除指定年份", estimate: null, n: null, r2: null, note: "按年份调整样本", error: "请至少选择一个需要剔除的年份" });
     }
   }
   if (checks.includes("alternative-x")) {
@@ -616,6 +621,7 @@ export default function Home() {
   const [alternativeY, setAlternativeY] = useState("");
   const [panelVariable, setPanelVariable] = useState("firm_id");
   const [timeVariable, setTimeVariable] = useState("year");
+  const [excludedYears, setExcludedYears] = useState<string[]>([]);
   const [controls, setControls] = useState<string[]>(["education"]);
   const [seType, setSeType] = useState<SEType>("cluster-two");
   const [cluster1, setCluster1] = useState("firm_id");
@@ -655,6 +661,14 @@ export default function Home() {
     });
   }, [columns, rows]);
   const numericColumns = profiles.filter((item) => item.type === "数值").map((item) => item.name);
+  const availableYears = useMemo(() => {
+    if (!timeVariable) return [];
+    return Array.from(new Set(rows.map((row) => row[timeVariable]).filter((value) => value !== "")))
+      .sort((a, b) => {
+        const numericDifference = Number(a) - Number(b);
+        return Number.isFinite(numericDifference) ? numericDifference : a.localeCompare(b, "zh-CN");
+      });
+  }, [rows, timeVariable]);
   const predictors = useMemo(
     () => [primaryX, ...controls]
       .filter((item) => analysisType !== "mediation" || item !== mediator)
@@ -703,6 +717,7 @@ export default function Home() {
       setFixedEffect2(yearGuess);
       setPanelVariable(firmGuess);
       setTimeVariable(yearGuess);
+      setExcludedYears([]);
       setAlternativeX("");
       setAlternativeY("");
       setFeType(firmGuess && yearGuess ? "two" : "none");
@@ -744,7 +759,7 @@ export default function Home() {
       if (analysisType === "robustness") {
         const result = runRobustnessSuite(
           rows, outcome, primaryX, controls, robustnessChecks,
-          alternativeX, alternativeY, panelVariable, timeVariable,
+          alternativeX, alternativeY, panelVariable, timeVariable, excludedYears,
           seType, cluster1, cluster2, feType, fixedEffect1, fixedEffect2,
         );
         setRobustnessResults(result);
@@ -1034,7 +1049,7 @@ export default function Home() {
                 {([
                   ["winsor", "1% 缩尾"],
                   ["lag", "核心变量滞后一期"],
-                  ["trim-years", "调整样本年份"],
+                  ["trim-years", "剔除指定年份"],
                   ["alternative-x", "替换核心解释变量"],
                   ["alternative-y", "替换被解释变量"],
                 ] as [RobustnessKind, string][]).map(([key, label]) => (
@@ -1045,21 +1060,40 @@ export default function Home() {
                 ))}
               </div>
             </div>
+            {robustnessChecks.includes("lag") && (
+              <div className="field">
+                <label htmlFor="panel-variable">企业 / 个体变量</label>
+                <select id="panel-variable" value={panelVariable} onChange={(e) => setPanelVariable(e.target.value)}>
+                  <option value="">请选择</option>{columns.map((column) => <option key={column}>{column}</option>)}
+                </select>
+              </div>
+            )}
             {(robustnessChecks.includes("lag") || robustnessChecks.includes("trim-years")) && (
-              <>
-                <div className="field">
-                  <label htmlFor="panel-variable">企业 / 个体变量</label>
-                  <select id="panel-variable" value={panelVariable} onChange={(e) => setPanelVariable(e.target.value)}>
-                    <option value="">请选择</option>{columns.map((column) => <option key={column}>{column}</option>)}
-                  </select>
+              <div className="field">
+                <label htmlFor="time-variable">年份 / 时间变量</label>
+                <select id="time-variable" value={timeVariable} onChange={(e) => { setTimeVariable(e.target.value); setExcludedYears([]); setRobustnessResults([]); }}>
+                  <option value="">请选择</option>{columns.map((column) => <option key={column}>{column}</option>)}
+                </select>
+              </div>
+            )}
+            {robustnessChecks.includes("trim-years") && (
+              <div className="field excludedYearsField">
+                <label>点击选择需要剔除的年份（可多选）</label>
+                <div className="yearChoices">
+                  {availableYears.length ? availableYears.map((year) => (
+                    <button
+                      key={year}
+                      className={excludedYears.includes(year) ? "selected" : ""}
+                      aria-pressed={excludedYears.includes(year)}
+                      onClick={() => {
+                        setExcludedYears((current) => current.includes(year) ? current.filter((item) => item !== year) : [...current, year]);
+                        setRobustnessResults([]);
+                      }}
+                    >{year}<span>{excludedYears.includes(year) ? "已剔除" : "保留"}</span></button>
+                  )) : <small>请先选择有效的年份 / 时间变量</small>}
                 </div>
-                <div className="field">
-                  <label htmlFor="time-variable">年份 / 时间变量</label>
-                  <select id="time-variable" value={timeVariable} onChange={(e) => setTimeVariable(e.target.value)}>
-                    <option value="">请选择</option>{columns.map((column) => <option key={column}>{column}</option>)}
-                  </select>
-                </div>
-              </>
+                <small className="selectionHint">已选择剔除：{excludedYears.length ? excludedYears.join("、") : "尚未选择"}</small>
+              </div>
             )}
             {robustnessChecks.includes("alternative-x") && (
               <div className="field">
