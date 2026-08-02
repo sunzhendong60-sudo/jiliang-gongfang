@@ -108,6 +108,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .modelBuilder { display: grid; grid-template-columns: 1fr auto 2fr auto; gap: 22px; align-items: end; border-top: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); padding: 35px 0; }
 .controlsBuilder { padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .mediationBuilder { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 2fr; align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.robustnessBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.robustnessChecks { grid-column: 1/-1; }
+.robustnessSummary { min-height: 74px; }
 .mediationPath { min-height: 74px; display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; border: 1px solid rgba(200,243,90,.22); background: rgba(0,0,0,.14); border-radius: 10px; padding: 12px 14px; }
 .mediationPath span { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: white; color: var(--ink); border-radius: 7px; padding: 7px 10px; font-size: 12px; font-weight: 750; }
 .mediationPath b { color: var(--lime); font-size: 11px; }
@@ -140,6 +143,21 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .error button:hover { background: rgba(255,255,255,.12); }
 
 .resultSection { min-height: 520px; }
+.robustnessOverview { display: grid; grid-template-columns: 140px 140px 140px 1fr; align-items: center; gap: 14px; margin-bottom: 16px; padding: 18px 22px; border-radius: 14px; background: #f1efe6; }
+.robustnessOverview div { border-right: 1px solid var(--line); }
+.robustnessOverview span { display: block; color: #7c8984; font-size: 10px; margin-bottom: 5px; }
+.robustnessOverview strong { font-size: 23px; }
+.robustnessOverview p { color: #66736f; font-size: 12px; line-height: 1.6; }
+.robustnessTable { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.robustnessHead, .robustnessRow { display: grid; grid-template-columns: 1.25fr 1fr .72fr .72fr .78fr 1.8fr; gap: 14px; align-items: center; padding: 14px 18px; }
+.robustnessHead { color: #78847f; background: #f7f6f0; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.robustnessRow { border-top: 1px solid var(--line); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.robustnessRow strong { font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.robustnessRow sup { margin-left: 2px; color: #176d49; font-weight: 800; }
+.robustnessRow span:nth-child(2) small { display: block; margin-top: 5px; color: #7c8884; }
+.robustnessRow span:last-child { color: #697671; line-height: 1.5; }
+.robustnessRow.failed { background: #fff2ef; }
+.robustnessRow.failed span:last-child { color: #9b3e35; }
 .mediationSummary { display: grid; grid-template-columns: 1fr 1.45fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
 .mediationSummary > div { min-height: 112px; border: 1px solid var(--line); border-radius: 14px; padding: 19px; background: #f7f6f0; }
 .mediationSummary span { display: block; color: #77847f; font-size: 10px; margin-bottom: 12px; }
@@ -220,8 +238,13 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .modelBuilder { grid-template-columns: 1fr; }
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mediationBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .robustnessBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mediationPath { grid-column: 1/-1; }
   .mediationSummary { grid-template-columns: repeat(2, 1fr); }
+  .robustnessOverview { grid-template-columns: repeat(3, 1fr); }
+  .robustnessOverview p { grid-column: 1/-1; }
+  .robustnessTable { overflow-x: auto; }
+  .robustnessHead, .robustnessRow { min-width: 850px; }
   .stataWrap { overflow-x: auto; }
   .stataWrap > * { min-width: 680px; }
   .formulaSymbol { display: none; }
@@ -245,6 +268,7 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .profileGrid { grid-template-columns: 1fr; }
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: 1fr; }
   .mediationBuilder, .mediationSummary { grid-template-columns: 1fr; }
+  .robustnessBuilder, .robustnessOverview { grid-template-columns: 1fr; }
   .stataHeader { align-items: flex-start; flex-direction: column; }
   .sectionHeading { align-items: flex-start; flex-direction: column; }
   .fitStrip { grid-template-columns: repeat(2,1fr); }

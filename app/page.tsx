@@ -20,7 +20,17 @@ type Estimate = {
 };
 type SEType = "classical" | "hc1" | "cluster-one" | "cluster-two";
 type FEType = "none" | "one" | "two";
-type AnalysisType = "regression" | "mediation";
+type AnalysisType = "regression" | "mediation" | "robustness";
+type RobustnessKind = "winsor" | "lag" | "trim-years" | "alternative-x" | "alternative-y";
+type RobustnessRow = {
+  key: string;
+  label: string;
+  estimate: Estimate | null;
+  n: number | null;
+  r2: number | null;
+  note: string;
+  error?: string;
+};
 type MediationResult = {
   n: number;
   pathA: Estimate;
@@ -34,7 +44,7 @@ type MediationResult = {
   bootstrapValid: number;
   mediatedShare: number | null;
 };
-const APP_VERSION = "2026.08.02.2";
+const APP_VERSION = "2026.08.02.3";
 
 const demoRows: Row[] = Array.from({ length: 60 }, (_, i) => {
   const firm = Math.floor(i / 6) + 1;
@@ -439,6 +449,112 @@ function significanceStars(statistic: number) {
   return "";
 }
 
+function quantile(values: number[], probability: number) {
+  if (!values.length) return 0;
+  return percentile(values, probability);
+}
+
+function winsorizeRows(rows: Row[], variables: string[], lower = 0.01, upper = 0.99) {
+  const limits = new Map<string, [number, number]>();
+  variables.forEach((variable) => {
+    const values = rows.map((row) => Number(row[variable])).filter(Number.isFinite);
+    limits.set(variable, [quantile(values, lower), quantile(values, upper)]);
+  });
+  return rows.map((row) => {
+    const copy = { ...row };
+    limits.forEach(([low, high], variable) => {
+      const value = Number(row[variable]);
+      if (Number.isFinite(value)) copy[variable] = String(Math.min(high, Math.max(low, value)));
+    });
+    return copy;
+  });
+}
+
+function addPanelLag(rows: Row[], variable: string, panel: string, time: string) {
+  if (!panel || !time) throw new Error("滞后检验需要选择企业变量和时间变量");
+  const lagName = `L1_${variable}`;
+  const groups = new Map<string, Row[]>();
+  rows.forEach((row) => groups.set(row[panel], [...(groups.get(row[panel]) ?? []), row]));
+  const lagged: Row[] = [];
+  groups.forEach((group) => {
+    const sorted = [...group].sort((a, b) => Number(a[time]) - Number(b[time]));
+    sorted.forEach((row, index) => {
+      if (index === 0) return;
+      const previous = sorted[index - 1];
+      const currentTime = Number(row[time]);
+      const previousTime = Number(previous[time]);
+      if (!Number.isFinite(currentTime) || !Number.isFinite(previousTime) || currentTime - previousTime !== 1) return;
+      lagged.push({ ...row, [lagName]: previous[variable] });
+    });
+  });
+  return { rows: lagged, lagName };
+}
+
+function runRobustnessSuite(
+  rows: Row[],
+  outcome: string,
+  exposure: string,
+  controls: string[],
+  checks: RobustnessKind[],
+  alternativeX: string,
+  alternativeY: string,
+  panelVariable: string,
+  timeVariable: string,
+  seType: SEType,
+  cluster1: string,
+  cluster2: string,
+  feType: FEType,
+  fixedEffect1: string,
+  fixedEffect2: string,
+) {
+  const common = [seType, cluster1, cluster2, feType, fixedEffect1, fixedEffect2] as const;
+  const output: RobustnessRow[] = [];
+  const run = (key: string, label: string, sample: Row[], y: string, x: string, note: string) => {
+    try {
+      const model = runOLS(sample, y, [x, ...controls.filter((item) => item !== x && item !== y)], ...common);
+      const estimate = model.estimates.find((item) => item.term === x) ?? null;
+      if (!estimate) throw new Error("核心系数无法识别");
+      output.push({ key, label, estimate, n: model.n, r2: model.r2, note });
+    } catch (reason) {
+      output.push({ key, label, estimate: null, n: null, r2: null, note, error: reason instanceof Error ? reason.message : "估计失败" });
+    }
+  };
+  run("baseline", "基准模型", rows, outcome, exposure, "原始变量与当前样本");
+  if (checks.includes("winsor")) {
+    run("winsor", "连续变量 1% 缩尾", winsorizeRows(rows, [outcome, exposure, ...controls]), outcome, exposure, "上下 1% 分位缩尾");
+  }
+  if (checks.includes("lag")) {
+    try {
+      const lagged = addPanelLag(rows, exposure, panelVariable, timeVariable);
+      run("lag", "核心变量滞后一期", lagged.rows, outcome, lagged.lagName, `按 ${panelVariable}、${timeVariable} 生成 L1`);
+    } catch (reason) {
+      output.push({ key: "lag", label: "核心变量滞后一期", estimate: null, n: null, r2: null, note: "面板滞后", error: reason instanceof Error ? reason.message : "估计失败" });
+    }
+  }
+  if (checks.includes("trim-years")) {
+    const years = Array.from(new Set(rows.map((row) => Number(row[timeVariable])).filter(Number.isFinite))).sort((a, b) => a - b);
+    if (years.length >= 3) {
+      const first = years[0];
+      const last = years[years.length - 1];
+      run("trim-years", "调整样本年份区间", rows.filter((row) => {
+        const year = Number(row[timeVariable]);
+        return year > first && year < last;
+      }), outcome, exposure, `剔除首尾年份 ${first}、${last}`);
+    } else {
+      output.push({ key: "trim-years", label: "调整样本年份区间", estimate: null, n: null, r2: null, note: "剔除首尾年份", error: "时间变量至少需要三个不同年份" });
+    }
+  }
+  if (checks.includes("alternative-x")) {
+    if (alternativeX) run("alternative-x", "替换核心解释变量", rows, outcome, alternativeX, `使用 ${alternativeX} 替换 ${exposure}`);
+    else output.push({ key: "alternative-x", label: "替换核心解释变量", estimate: null, n: null, r2: null, note: "替换 X", error: "尚未选择替代解释变量" });
+  }
+  if (checks.includes("alternative-y")) {
+    if (alternativeY) run("alternative-y", "替换被解释变量", rows, alternativeY, exposure, `使用 ${alternativeY} 替换 ${outcome}`);
+    else output.push({ key: "alternative-y", label: "替换被解释变量", estimate: null, n: null, r2: null, note: "替换 Y", error: "尚未选择替代被解释变量" });
+  }
+  return output;
+}
+
 function StataCell({ estimate }: { estimate?: Estimate }) {
   if (!estimate) return <span className="stataEmpty">—</span>;
   return (
@@ -495,6 +611,11 @@ export default function Home() {
   const [mediator, setMediator] = useState("experience");
   const [useBootstrap, setUseBootstrap] = useState(true);
   const [bootstrapRepetitions, setBootstrapRepetitions] = useState(200);
+  const [robustnessChecks, setRobustnessChecks] = useState<RobustnessKind[]>(["winsor", "lag", "trim-years"]);
+  const [alternativeX, setAlternativeX] = useState("");
+  const [alternativeY, setAlternativeY] = useState("");
+  const [panelVariable, setPanelVariable] = useState("firm_id");
+  const [timeVariable, setTimeVariable] = useState("year");
   const [controls, setControls] = useState<string[]>(["education"]);
   const [seType, setSeType] = useState<SEType>("cluster-two");
   const [cluster1, setCluster1] = useState("firm_id");
@@ -511,6 +632,7 @@ export default function Home() {
   } | null>(null);
   const [error, setError] = useState("");
   const [mediationResult, setMediationResult] = useState<MediationResult | null>(null);
+  const [robustnessResults, setRobustnessResults] = useState<RobustnessRow[]>([]);
   const [running, setRunning] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
 
@@ -579,9 +701,14 @@ export default function Home() {
       setSeType(firmGuess && yearGuess ? "cluster-two" : "hc1");
       setFixedEffect1(firmGuess);
       setFixedEffect2(yearGuess);
+      setPanelVariable(firmGuess);
+      setTimeVariable(yearGuess);
+      setAlternativeX("");
+      setAlternativeY("");
       setFeType(firmGuess && yearGuess ? "two" : "none");
       setEstimates([]);
       setMediationResult(null);
+      setRobustnessResults([]);
       setFit(null);
       setError("");
     };
@@ -614,6 +741,19 @@ export default function Home() {
         setError("");
         return;
       }
+      if (analysisType === "robustness") {
+        const result = runRobustnessSuite(
+          rows, outcome, primaryX, controls, robustnessChecks,
+          alternativeX, alternativeY, panelVariable, timeVariable,
+          seType, cluster1, cluster2, feType, fixedEffect1, fixedEffect2,
+        );
+        setRobustnessResults(result);
+        setEstimates([]);
+        setMediationResult(null);
+        setFit(null);
+        setError("");
+        return;
+      }
       const result = runOLS(
         rows,
         outcome,
@@ -627,6 +767,7 @@ export default function Home() {
       );
       setEstimates(result.estimates);
       setMediationResult(null);
+      setRobustnessResults([]);
       setFit({
         n: result.n,
         r2: result.r2,
@@ -653,6 +794,24 @@ export default function Home() {
   }
 
   function exportResult() {
+    if (analysisType === "robustness" && robustnessResults.length) {
+      const csv = [
+        ["稳健性检验", "系数", "标准误", "t值", "显著性", "样本量", "R2", "说明", "状态"].join(","),
+        ...robustnessResults.map((item) => [
+          item.label,
+          item.estimate?.coefficient ?? "",
+          item.estimate?.standardError ?? "",
+          item.estimate?.statistic ?? "",
+          item.estimate ? significanceStars(item.estimate.statistic) : "",
+          item.n ?? "",
+          item.r2 ?? "",
+          item.note,
+          item.error ?? "成功",
+        ].join(",")),
+      ].join("\n");
+      downloadCSV(csv, "计量工坊_稳健性检验.csv");
+      return;
+    }
     if (analysisType === "mediation" && mediationResult) {
       const result = mediationResult;
       const csv = useBootstrap
@@ -788,7 +947,7 @@ export default function Home() {
         <div className="analysisTabs" role="group" aria-label="分析类型">
           <button
             className={analysisType === "regression" ? "active" : ""}
-            onClick={() => { setAnalysisType("regression"); setMediationResult(null); setError(""); }}
+            onClick={() => { setAnalysisType("regression"); setMediationResult(null); setRobustnessResults([]); setError(""); }}
           >基准回归</button>
           <button
             className={analysisType === "mediation" ? "active" : ""}
@@ -796,9 +955,19 @@ export default function Home() {
               setAnalysisType("mediation");
               setControls((current) => current.filter((item) => item !== mediator));
               setEstimates([]);
+              setRobustnessResults([]);
               setError("");
             }}
           >中介效应</button>
+          <button
+            className={analysisType === "robustness" ? "active" : ""}
+            onClick={() => {
+              setAnalysisType("robustness");
+              setEstimates([]);
+              setMediationResult(null);
+              setError("");
+            }}
+          >稳健性检验</button>
         </div>
         <div className="modelBuilder">
           <div className="field">
@@ -820,7 +989,7 @@ export default function Home() {
             </select>
           </div>
           <button className="runButton" onClick={estimate} disabled={running}>
-            {running ? "正在计算…" : analysisType === "mediation" ? "运行中介检验" : "运行回归"} <span>↗</span>
+            {running ? "正在计算…" : analysisType === "mediation" ? "运行中介检验" : analysisType === "robustness" ? "运行稳健性检验" : "运行回归"} <span>↗</span>
           </button>
         </div>
         {analysisType === "mediation" && (
@@ -854,6 +1023,63 @@ export default function Home() {
             <div className="mediationPath" aria-label="中介效应路径">
               <span>{primaryX || "X"}</span><b>→ a →</b><span>{mediator || "M"}</span><b>→ b →</b><span>{outcome || "Y"}</span>
               <small>同时估计直接效应 c′ 与总效应 c</small>
+            </div>
+          </div>
+        )}
+        {analysisType === "robustness" && (
+          <div className="robustnessBuilder">
+            <div className="field robustnessChecks">
+              <label>选择稳健性检验（可多选）</label>
+              <div className="variableChoices">
+                {([
+                  ["winsor", "1% 缩尾"],
+                  ["lag", "核心变量滞后一期"],
+                  ["trim-years", "调整样本年份"],
+                  ["alternative-x", "替换核心解释变量"],
+                  ["alternative-y", "替换被解释变量"],
+                ] as [RobustnessKind, string][]).map(([key, label]) => (
+                  <button key={key} className={robustnessChecks.includes(key) ? "selected" : ""} onClick={() => {
+                    setRobustnessChecks((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+                    setRobustnessResults([]);
+                  }}>{label}<span>{robustnessChecks.includes(key) ? "×" : "+"}</span></button>
+                ))}
+              </div>
+            </div>
+            {(robustnessChecks.includes("lag") || robustnessChecks.includes("trim-years")) && (
+              <>
+                <div className="field">
+                  <label htmlFor="panel-variable">企业 / 个体变量</label>
+                  <select id="panel-variable" value={panelVariable} onChange={(e) => setPanelVariable(e.target.value)}>
+                    <option value="">请选择</option>{columns.map((column) => <option key={column}>{column}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="time-variable">年份 / 时间变量</label>
+                  <select id="time-variable" value={timeVariable} onChange={(e) => setTimeVariable(e.target.value)}>
+                    <option value="">请选择</option>{columns.map((column) => <option key={column}>{column}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
+            {robustnessChecks.includes("alternative-x") && (
+              <div className="field">
+                <label htmlFor="alternative-x">替代核心解释变量</label>
+                <select id="alternative-x" value={alternativeX} onChange={(e) => setAlternativeX(e.target.value)}>
+                  <option value="">请选择</option>{numericColumns.filter((column) => column !== outcome && column !== primaryX).map((column) => <option key={column}>{column}</option>)}
+                </select>
+              </div>
+            )}
+            {robustnessChecks.includes("alternative-y") && (
+              <div className="field">
+                <label htmlFor="alternative-y">替代被解释变量</label>
+                <select id="alternative-y" value={alternativeY} onChange={(e) => setAlternativeY(e.target.value)}>
+                  <option value="">请选择</option>{numericColumns.filter((column) => column !== outcome && column !== primaryX).map((column) => <option key={column}>{column}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="inferenceSummary robustnessSummary">
+              <span>当前检验组合</span><strong>基准模型 + {robustnessChecks.length} 项检验</strong>
+              <small>所有模型继承下方控制变量、固定效应和标准误设定。</small>
             </div>
           </div>
         )}
@@ -958,7 +1184,9 @@ export default function Home() {
             ? useBootstrap
               ? "中介分析依次估计 X→M、X+M→Y 与 X→Y；间接效应使用 Bootstrap 百分位置信区间。该结果描述统计路径，不会自动证明因果中介关系。"
               : "未使用 Bootstrap：结果按 Stata 风格展示系数、括号内 t 值与显著性星号。间接效应同时报告 Sobel 近似，但统计路径本身不会自动证明因果中介关系。"
-            : "固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。"}
+            : analysisType === "robustness"
+              ? "稳健性检验用于观察核心结论对变量处理、模型时序和样本区间的敏感度。替换变量需具有与原变量一致的经济含义；结果稳定也不能替代识别假设论证。"
+              : "固定效应改变系数识别所依赖的组内变动；聚类变量只调整统计推断。企业数或年份数很少时，常规聚类渐近近似可能不可靠，正式研究仍需考虑 wild cluster bootstrap 等方法。"}
         </p>
       </section>
 
@@ -966,11 +1194,37 @@ export default function Home() {
         <div className="sectionHeading">
           <div>
             <span className="step">03 / 估计结果</span>
-            <h2>{estimates.length || mediationResult ? "结果已就绪" : "运行模型后查看结果"}</h2>
+            <h2>{estimates.length || mediationResult || robustnessResults.length ? "结果已就绪" : "运行模型后查看结果"}</h2>
           </div>
-          {(estimates.length > 0 || mediationResult) && <button className="exportButton" onClick={exportResult}>导出 CSV ↓</button>}
+          {(estimates.length > 0 || mediationResult || robustnessResults.length > 0) && <button className="exportButton" onClick={exportResult}>导出 CSV ↓</button>}
         </div>
-        {analysisType === "mediation" && mediationResult ? (
+        {analysisType === "robustness" && robustnessResults.length ? (
+          <>
+            <div className="robustnessOverview">
+              <div><span>模型数量</span><strong>{robustnessResults.length}</strong></div>
+              <div><span>成功估计</span><strong>{robustnessResults.filter((item) => item.estimate).length}</strong></div>
+              <div><span>方向一致</span><strong>{(() => {
+                const valid = robustnessResults.filter((item) => item.estimate);
+                const baseline = valid[0]?.estimate?.coefficient ?? 0;
+                return valid.length ? `${valid.filter((item) => (item.estimate?.coefficient ?? 0) * baseline >= 0).length}/${valid.length}` : "—";
+              })()}</strong></div>
+              <p>{feLabel}；{seLabel}。星号基于各模型当前标准误。</p>
+            </div>
+            <div className="robustnessTable">
+              <div className="robustnessHead"><span>检验方案</span><span>核心系数</span><span>t 值</span><span>样本量</span><span>{feType === "none" ? "R²" : "组内 R²"}</span><span>处理说明</span></div>
+              {robustnessResults.map((item) => (
+                <div className={`robustnessRow ${item.error ? "failed" : ""}`} key={item.key}>
+                  <strong>{item.label}</strong>
+                  <span>{item.estimate ? <>{item.estimate.coefficient.toFixed(4)}<sup>{significanceStars(item.estimate.statistic)}</sup><small>({item.estimate.standardError.toFixed(4)})</small></> : "—"}</span>
+                  <span>{item.estimate?.statistic.toFixed(3) ?? "—"}</span>
+                  <span>{item.n ?? "—"}</span><span>{item.r2?.toFixed(4) ?? "—"}</span>
+                  <span>{item.error ? `未完成：${item.error}` : item.note}</span>
+                </div>
+              ))}
+            </div>
+            <p className="resultFootnote">括号内为标准误；*** p&lt;0.01，** p&lt;0.05，* p&lt;0.10（双侧渐近近似）。某项未完成时会保留原因，不影响其他检验输出。</p>
+          </>
+        ) : analysisType === "mediation" && mediationResult ? (
           <>
             {useBootstrap && mediationResult.ciLow !== null && mediationResult.ciHigh !== null ? (
               <div className="mediationSummary">
