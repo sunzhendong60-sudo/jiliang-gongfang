@@ -102,8 +102,16 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .sectionHeading.light .step { color: #aabeb6; }
 .sectionHeading.light h2 { color: white; }
 .methodBadge { color: var(--lime); border-color: rgba(200,243,90,.22); background: rgba(0,0,0,.14); }
+.analysisTabs { display: inline-flex; padding: 4px; margin-bottom: 18px; border: 1px solid rgba(255,255,255,.16); border-radius: 12px; background: rgba(0,0,0,.13); }
+.analysisTabs button { border: 0; border-radius: 8px; padding: 10px 18px; color: #b9c9c3; background: transparent; cursor: pointer; font-weight: 700; }
+.analysisTabs button.active { background: var(--lime); color: var(--ink); }
 .modelBuilder { display: grid; grid-template-columns: 1fr auto 2fr auto; gap: 22px; align-items: end; border-top: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); padding: 35px 0; }
 .controlsBuilder { padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.mediationBuilder { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 2fr; align-items: end; gap: 14px; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+.mediationPath { min-height: 74px; display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; border: 1px solid rgba(200,243,90,.22); background: rgba(0,0,0,.14); border-radius: 10px; padding: 12px 14px; }
+.mediationPath span { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: white; color: var(--ink); border-radius: 7px; padding: 7px 10px; font-size: 12px; font-weight: 750; }
+.mediationPath b { color: var(--lime); font-size: 11px; }
+.mediationPath small { flex-basis: 100%; color: #aebfb8; text-align: center; font-size: 10px; }
 .fixedEffectsBuilder,
 .inferenceBuilder { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 1.3fr; gap: 14px; align-items: end; padding: 28px 0; border-bottom: 1px solid rgba(255,255,255,.14); }
 .field label { display: block; color: #aebfb8; font-size: 11px; margin-bottom: 12px; }
@@ -116,6 +124,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .variableChoices button span { margin-left: 9px; color: #7d8f88; }
 .runButton { border: 0; background: var(--lime); color: var(--ink); padding: 16px 21px; border-radius: 10px; font-weight: 750; cursor: pointer; white-space: nowrap; }
 .runButton:hover { background: #d7ff6e; }
+.runButton:disabled { opacity: .72; cursor: wait; }
 .runButton span { margin-left: 11px; }
 .inferenceSummary { min-height: 74px; border: 1px solid rgba(200,243,90,.22); background: rgba(0,0,0,.14); border-radius: 10px; padding: 12px 14px; }
 .inferenceSummary span, .inferenceSummary small { display: block; color: #aebfb8; font-size: 10px; line-height: 1.5; }
@@ -126,6 +135,14 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .error button:hover { background: rgba(255,255,255,.12); }
 
 .resultSection { min-height: 520px; }
+.mediationSummary { display: grid; grid-template-columns: 1fr 1.45fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.mediationSummary > div { min-height: 112px; border: 1px solid var(--line); border-radius: 14px; padding: 19px; background: #f7f6f0; }
+.mediationSummary span { display: block; color: #77847f; font-size: 10px; margin-bottom: 12px; }
+.mediationSummary strong { font-size: 21px; letter-spacing: -.025em; }
+.mediationVerdict { background: #efece2 !important; }
+.mediationVerdict.supported { background: var(--green) !important; color: white; }
+.mediationVerdict.supported span { color: #b8cbc3; }
+.mediationVerdict.supported strong { color: var(--lime); }
 .fitStrip { display: grid; grid-template-columns: 140px 140px 140px 1fr; align-items: center; background: #f1efe6; border-radius: 14px; padding: 18px 22px; margin-bottom: 16px; }
 .fitStrip div { border-right: 1px solid var(--line); margin-right: 20px; }
 .fitStrip span { display: block; font-size: 10px; color: #7c8984; margin-bottom: 5px; }
@@ -136,6 +153,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .tableHead { color: #78847f; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; background: #f7f6f0; }
 .tableRow { border-top: 1px solid var(--line); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
 .tableRow strong { font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.indirectRow { background: #f4f8e8; }
+.indirectRow strong { color: #315919; }
+.resultFootnote { margin: 14px 2px 0; color: #74807c; font-size: 11px; line-height: 1.7; }
 .significant { color: #11734d; font-weight: 800; }
 .emptyResult { min-height: 240px; display: grid; place-items: center; align-content: center; border: 1px dashed #c9cec9; border-radius: 16px; color: #87918e; }
 .emptyGlyph { font-family: Georgia, serif; font-size: 60px; color: #bac1bd; }
@@ -172,6 +192,9 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .profileGrid { grid-template-columns: repeat(2, 1fr); }
   .modelBuilder { grid-template-columns: 1fr; }
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mediationBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mediationPath { grid-column: 1/-1; }
+  .mediationSummary { grid-template-columns: repeat(2, 1fr); }
   .formulaSymbol { display: none; }
   .runButton { width: 100%; }
   .fitStrip { grid-template-columns: repeat(3,1fr); }
@@ -192,6 +215,7 @@ footer button { background: transparent; color: var(--lime); border: 0; cursor: 
   .miniChart { height: 160px; }
   .profileGrid { grid-template-columns: 1fr; }
   .fixedEffectsBuilder, .inferenceBuilder { grid-template-columns: 1fr; }
+  .mediationBuilder, .mediationSummary { grid-template-columns: 1fr; }
   .sectionHeading { align-items: flex-start; flex-direction: column; }
   .fitStrip { grid-template-columns: repeat(2,1fr); }
   .fitStrip div:nth-child(2) { border-right: 0; }
